@@ -308,7 +308,12 @@ function renderQueueBadge() {
 function tap(delta) {
   const uuid = crypto.randomUUID();
   setCount(count + delta); // optimistic
-  sendOp({ delta, uuid });
+  // Toujours passer par la queue — garantit qu'aucun tap n'est perdu
+  // même en cas d'appuis rapides ou de réseau instable.
+  queue.push({ delta, uuid });
+  localStorage.setItem('op_queue', JSON.stringify(queue));
+  renderQueueBadge();
+  flush();
 }
 
 function fetchWithTimeout(url, opts, ms = 5000) {
@@ -318,52 +323,46 @@ function fetchWithTimeout(url, opts, ms = 5000) {
     .finally(() => clearTimeout(timer));
 }
 
-async function sendOp(op) {
-  try {
-    const res = await fetchWithTimeout('/api/count', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(op),
-    });
-    const data = await res.json();
-    if (!data.dup) setCount(data.count);
-    triggerAlert(data.alert);
-  } catch {
-    // Network failure — queue and retry when online
-    queue.push(op);
-    localStorage.setItem('op_queue', JSON.stringify(queue));
-    renderQueueBadge();
-    setOnline(false);
-  }
-}
+// Verrou : une seule instance de flush peut tourner à la fois.
+// Sans ça, deux appels concurrents lisent le même queue[0] et
+// le double shift() supprime silencieusement l'opération suivante.
+let flushing = false;
 
-async function flushQueue() {
-  while (queue.length > 0) {
-    const op = queue[0];
-    try {
-      const res = await fetchWithTimeout('/api/count', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(op),
-      });
-      const data = await res.json();
-      queue.shift();
-      localStorage.setItem('op_queue', JSON.stringify(queue));
-      renderQueueBadge();
-      if (!data.dup) setCount(data.count);
-    } catch {
-      break; // still offline, stop trying
+async function flush() {
+  if (flushing) return;
+  flushing = true;
+  try {
+    while (queue.length > 0) {
+      const op = queue[0];
+      try {
+        const res = await fetchWithTimeout('/api/count', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(op),
+        });
+        const data = await res.json();
+        queue.shift();
+        localStorage.setItem('op_queue', JSON.stringify(queue));
+        renderQueueBadge();
+        if (!data.dup) setCount(data.count);
+        triggerAlert(data.alert);
+      } catch {
+        setOnline(false);
+        break; // réseau indisponible — retry au prochain événement
+      }
     }
+  } finally {
+    flushing = false;
+    if (queue.length === 0) setOnline(true);
   }
-  if (queue.length === 0) setOnline(true);
 }
 
 // Flush on reconnect events
-window.addEventListener('online', flushQueue);
+window.addEventListener('online', flush);
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && queue.length > 0) flushQueue();
+  if (!document.hidden && queue.length > 0) flush();
 });
-setInterval(() => { if (navigator.onLine && queue.length > 0) flushQueue(); }, 2000);
+setInterval(() => { if (navigator.onLine && queue.length > 0) flush(); }, 2000);
 
 // ── WebSocket — real-time sync ──────────────────────────────────────
 
@@ -371,7 +370,7 @@ function connect() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const ws = new WebSocket(`${proto}//${location.host}`);
 
-  ws.onopen = () => { setOnline(true); flushQueue(); };
+  ws.onopen = () => { setOnline(true); flush(); };
 
   ws.onmessage = ({ data }) => {
     const msg = JSON.parse(data);
