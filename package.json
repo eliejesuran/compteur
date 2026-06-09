@@ -1,0 +1,18 @@
+{
+  "name": "compteur-evenement",
+  "version": "1.0.0",
+  "description": "Compteur de personnes temps réel pour événements",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "qrcode": "^1.5.3",
+    "ws": "^8.14.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

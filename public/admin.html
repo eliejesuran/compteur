@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin – Compteur</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --surface: #1e293b;
+      --border: #334155;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --accent: #3b82f6;
+      --ok: #22c55e;
+      --warn: #f59e0b;
+      --danger: #ef4444;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, sans-serif;
+      min-height: 100dvh;
+      padding: 16px;
+      max-width: 520px;
+      margin: 0 auto;
+    }
+    h1 { font-size: 22px; font-weight: 800; margin-bottom: 20px; }
+    h2 {
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      font-weight: 600;
+      margin-bottom: 10px;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+    label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+    input[type="password"],
+    input[type="number"],
+    input[type="text"] {
+      width: 100%;
+      padding: 11px 14px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 16px;
+      margin-bottom: 8px;
+      outline: none;
+    }
+    input:focus { border-color: var(--accent); }
+    button {
+      width: 100%;
+      padding: 12px;
+      border-radius: 10px;
+      border: none;
+      background: var(--accent);
+      color: #fff;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: filter 0.1s;
+    }
+    button:hover { filter: brightness(1.1); }
+    button:active { filter: brightness(0.85); }
+    button.secondary { background: #334155; }
+    button.danger { background: var(--danger); }
+    button + button { margin-top: 8px; }
+    .toast {
+      display: none;
+      padding: 9px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      text-align: center;
+      margin-top: 8px;
+    }
+    .toast.ok  { background: rgba(34,197,94,0.15); color: var(--ok); border: 1px solid rgba(34,197,94,0.3); }
+    .toast.err { background: rgba(239,68,68,0.15); color: var(--danger); border: 1px solid rgba(239,68,68,0.3); }
+    /* Big live count */
+    #live-count {
+      font-size: 64px;
+      font-weight: 900;
+      text-align: center;
+      color: var(--accent);
+      line-height: 1;
+      margin: 4px 0 6px;
+      font-variant-numeric: tabular-nums;
+    }
+    #live-sub { text-align: center; font-size: 13px; color: var(--muted); }
+    /* QR */
+    #qr-img { display: block; width: 220px; margin: 12px auto; border-radius: 12px; }
+    #qr-url {
+      text-align: center;
+      font-size: 12px;
+      color: var(--muted);
+      word-break: break-all;
+      margin-top: 6px;
+    }
+    #ip-list { font-size: 12px; color: var(--muted); margin-top: 10px; line-height: 1.8; }
+    #ip-list a { color: var(--accent); text-decoration: none; }
+    #login-view { }
+    #main-view  { display: none; }
+  </style>
+</head>
+<body>
+
+<!-- ── Login ── -->
+<div id="login-view">
+  <h1>Administration</h1>
+  <div class="card">
+    <h2>Connexion</h2>
+    <input type="password" id="code-input" placeholder="Code admin" autocomplete="current-password">
+    <button onclick="login()">Se connecter</button>
+    <div class="toast" id="login-err"></div>
+  </div>
+</div>
+
+<!-- ── Main ── -->
+<div id="main-view">
+  <h1>Administration</h1>
+
+  <!-- Live count -->
+  <div class="card">
+    <h2>Compteur en direct</h2>
+    <div id="live-count">–</div>
+    <div id="live-sub">– / –</div>
+    <a href="/stats.html" target="_blank" style="text-decoration:none; margin-top:10px; display:block;">
+      <button class="secondary">Voir les graphiques →</button>
+    </a>
+  </div>
+
+  <!-- QR code -->
+  <div class="card">
+    <h2>QR code compteur</h2>
+    <img id="qr-img" src="" alt="QR Code">
+    <div id="qr-url"></div>
+    <div id="ip-list"></div>
+  </div>
+
+  <!-- Capacity -->
+  <div class="card">
+    <h2>Seuil d'alerte (capacité max)</h2>
+    <label>À partir de ce nombre, tous les appareils vibrent et passent en rouge.</label>
+    <input type="number" id="cap-input" placeholder="ex : 200" min="1">
+    <button onclick="saveConfig()">Enregistrer</button>
+    <div class="toast" id="cap-toast"></div>
+  </div>
+
+  <!-- Change code -->
+  <div class="card">
+    <h2>Changer le code admin</h2>
+    <input type="password" id="new-code" placeholder="Nouveau code (min. 4 caractères)">
+    <button onclick="changeCode()">Changer le code</button>
+    <div class="toast" id="code-toast"></div>
+  </div>
+
+  <!-- Reset -->
+  <div class="card">
+    <h2>Réinitialiser l'événement</h2>
+    <label>Remet le compteur à 0 et efface tout l'historique.</label>
+    <button class="danger" onclick="resetCounter()">Remettre à zéro</button>
+    <div class="toast" id="reset-toast"></div>
+  </div>
+</div>
+
+<script>
+'use strict';
+let adminCode = '';
+
+// ── Helpers ──
+
+function toast(id, msg, type, ms = 3000) {
+  const el = document.getElementById(id);
+  el.textContent = msg;
+  el.className = `toast ${type}`;
+  el.style.display = 'block';
+  clearTimeout(el._timer);
+  el._timer = setTimeout(() => { el.style.display = 'none'; }, ms);
+}
+
+function fetchWithTimeout(url, opts, ms = 6000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(t));
+}
+
+// ── Login ──
+
+async function login() {
+  const code = document.getElementById('code-input').value.trim();
+  if (!code) return;
+  const res = await fetchWithTimeout(`/api/history?code=${encodeURIComponent(code)}`);
+  if (!res.ok) { toast('login-err', 'Code incorrect', 'err'); return; }
+
+  adminCode = code;
+  document.getElementById('login-view').style.display = 'none';
+  document.getElementById('main-view').style.display = 'block';
+  await loadAll();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('code-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') login();
+  });
+});
+
+// ── Load ──
+
+async function loadAll() {
+  // State
+  const st = await fetchWithTimeout('/api/state').then(r => r.json());
+  updateLiveCount(st.count, st.capacity);
+  document.getElementById('cap-input').value = st.capacity;
+
+  // QR code
+  try {
+    const qd = await fetchWithTimeout(`/api/qr?code=${adminCode}`).then(r => r.json());
+    document.getElementById('qr-img').src = qd.qr;
+    document.getElementById('qr-url').textContent = qd.url;
+  } catch {}
+
+  // Local IPs (only meaningful on local deployments)
+  try {
+    const ipd = await fetchWithTimeout(`/api/ips?code=${adminCode}`).then(r => r.json());
+    if (ipd.ips.length) {
+      const links = ipd.ips.map(ip =>
+        `<a href="http://${ip}:${ipd.port}" target="_blank">http://${ip}:${ipd.port}</a>`
+      ).join('<br>');
+      document.getElementById('ip-list').innerHTML = `Adresses réseau :<br>${links}`;
+    }
+  } catch {}
+
+  startWS();
+}
+
+function updateLiveCount(c, cap) {
+  document.getElementById('live-count').textContent = c;
+  if (cap) document.getElementById('live-sub').textContent = `${c} / ${cap} personnes`;
+}
+
+// ── WebSocket ──
+
+function startWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${proto}//${location.host}`);
+  ws.onmessage = ({ data }) => {
+    const msg = JSON.parse(data);
+    if (msg.type === 'init' || msg.type === 'update') updateLiveCount(msg.count, msg.capacity);
+    if (msg.type === 'config') {
+      document.getElementById('cap-input').value = msg.capacity;
+      const cur = msg.count ?? (parseInt(document.getElementById('live-count').textContent) || 0);
+      updateLiveCount(cur, msg.capacity);
+    }
+  };
+  ws.onclose = () => setTimeout(startWS, 2000);
+  ws.onerror  = () => ws.close();
+}
+
+// ── Actions ──
+
+async function saveConfig() {
+  const capacity = parseInt(document.getElementById('cap-input').value, 10);
+  if (!capacity || capacity < 1) { toast('cap-toast', 'Valeur invalide', 'err'); return; }
+  const res = await fetchWithTimeout('/api/admin/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: adminCode, capacity }),
+  }).then(r => r.json());
+  if (res.ok) toast('cap-toast', `Seuil réglé à ${res.capacity} personnes`, 'ok');
+  else toast('cap-toast', 'Erreur', 'err');
+}
+
+async function changeCode() {
+  const newCode = document.getElementById('new-code').value.trim();
+  if (newCode.length < 4) { toast('code-toast', 'Code trop court (min. 4 caractères)', 'err'); return; }
+  const res = await fetchWithTimeout('/api/admin/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: adminCode, newCode }),
+  }).then(r => r.json());
+  if (res.ok) {
+    adminCode = newCode;
+    document.getElementById('new-code').value = '';
+    toast('code-toast', 'Code modifié', 'ok');
+  } else {
+    toast('code-toast', 'Erreur', 'err');
+  }
+}
+
+async function resetCounter() {
+  if (!confirm('Remettre le compteur à 0 et effacer l\'historique ?')) return;
+  const res = await fetchWithTimeout('/api/admin/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: adminCode, reset: true }),
+  }).then(r => r.json());
+  if (res.ok) {
+    updateLiveCount(0, null);
+    toast('reset-toast', 'Compteur remis à zéro', 'ok');
+  } else {
+    toast('reset-toast', 'Erreur', 'err');
+  }
+}
+</script>
+</body>
+</html>

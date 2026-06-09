@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Compteur</title>
+  <style>
+    :root {
+      --bg: #111827;
+      --surface: #1f2937;
+      --ok: #22c55e;
+      --warn: #f59e0b;
+      --danger: #ef4444;
+      --blue: #3b82f6;
+      --text: #f9fafb;
+      --muted: #6b7280;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+    html, body {
+      height: 100%;
+      height: 100dvh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, sans-serif;
+      overflow: hidden;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Status bar ── */
+    #statusbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 16px;
+      padding-top: max(10px, env(safe-area-inset-top));
+      background: var(--surface);
+      font-size: 13px;
+      flex-shrink: 0;
+    }
+
+    #dot {
+      width: 9px; height: 9px;
+      border-radius: 50%;
+      background: var(--muted);
+      transition: background 0.4s;
+      flex-shrink: 0;
+    }
+    #dot.online  { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+    #dot.offline { background: var(--danger); }
+
+    #status-text { font-size: 13px; }
+
+    #queue-badge {
+      display: none;
+      background: var(--warn);
+      color: #000;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 999px;
+    }
+
+    #cap-label { margin-left: auto; font-size: 13px; opacity: 0.7; }
+
+    /* ── Count area ── */
+    #count-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 8px;
+      transition: background 0.5s;
+      min-height: 0;
+    }
+
+    #count {
+      font-size: clamp(72px, 24vw, 150px);
+      font-weight: 900;
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
+      transition: color 0.4s;
+    }
+    #count.bump { animation: bump 0.15s ease-out; }
+    @keyframes bump {
+      0%   { transform: scale(1); }
+      50%  { transform: scale(1.1); }
+      100% { transform: scale(1); }
+    }
+
+    #count-label {
+      font-size: 16px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+
+    /* Capacity progress bar */
+    #bar-wrap {
+      width: min(65%, 280px);
+      height: 6px;
+      background: #374151;
+      border-radius: 3px;
+      margin-top: 14px;
+      overflow: hidden;
+    }
+    #bar {
+      height: 100%;
+      border-radius: 3px;
+      background: var(--ok);
+      transition: width 0.4s ease, background 0.4s;
+    }
+
+    /* Threshold state classes */
+    .state-warn   #count { color: var(--warn); }
+    .state-warn   #bar   { background: var(--warn); }
+    .state-danger #count { color: var(--danger); }
+    .state-danger #bar   { background: var(--danger); }
+
+    /* ── Main buttons ── */
+    #main-btns {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      padding: 0 8px 6px;
+      flex-shrink: 0;
+    }
+
+    .btn-main {
+      height: clamp(80px, 18vh, 130px);
+      border: none;
+      border-radius: 18px;
+      font-size: clamp(32px, 9vw, 58px);
+      font-weight: 900;
+      color: #fff;
+      cursor: pointer;
+      touch-action: manipulation;
+      transition: transform 0.08s, filter 0.08s;
+      letter-spacing: -0.02em;
+    }
+    .btn-main:active { transform: scale(0.94); filter: brightness(0.8); }
+    #btn-p { background: #1d4ed8; }
+    #btn-m { background: #991b1b; }
+
+    /* ── Small buttons ── */
+    #small-btns {
+      display: flex;
+      gap: 8px;
+      padding: 0 8px;
+      padding-bottom: max(12px, env(safe-area-inset-bottom));
+      flex-shrink: 0;
+    }
+
+    .btn-small {
+      flex: 1;
+      height: 46px;
+      border: 1.5px solid #374151;
+      border-radius: 12px;
+      background: transparent;
+      color: #9ca3af;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      touch-action: manipulation;
+      transition: background 0.1s, color 0.1s, border-color 0.1s;
+    }
+    .btn-small:active { background: #374151; color: #fff; border-color: #4b5563; }
+
+    /* ── Alert overlay ── */
+    #alert-overlay {
+      position: fixed; inset: 0;
+      pointer-events: none;
+      opacity: 0;
+      background: rgba(239, 68, 68, 0.12);
+      transition: opacity 0.3s;
+    }
+    #alert-overlay.show { opacity: 1; animation: pulse-red 1.4s ease-in-out infinite; }
+    @keyframes pulse-red {
+      0%, 100% { background: rgba(239,68,68,0.08); }
+      50%       { background: rgba(239,68,68,0.22); }
+    }
+  </style>
+</head>
+<body>
+
+<div id="statusbar">
+  <div id="dot"></div>
+  <span id="status-text">Connexion…</span>
+  <span id="queue-badge"></span>
+  <span id="cap-label">– / –</span>
+</div>
+
+<div id="count-area">
+  <div id="count">–</div>
+  <div id="count-label">personnes</div>
+  <div id="bar-wrap"><div id="bar" style="width:0%"></div></div>
+</div>
+
+<div id="main-btns">
+  <button class="btn-main" id="btn-p" onclick="tap(1)">+1</button>
+  <button class="btn-main" id="btn-m" onclick="tap(-1)">−1</button>
+</div>
+
+<div id="small-btns">
+  <button class="btn-small" onclick="tap(5)">+5</button>
+  <button class="btn-small" onclick="tap(-5)">−5</button>
+</div>
+
+<div id="alert-overlay"></div>
+
+<script>
+'use strict';
+let count = 0;
+let capacity = 100;
+let alertActive = false;
+
+// Offline queue: persisted in localStorage so ops survive page reloads
+let queue = [];
+try { queue = JSON.parse(localStorage.getItem('op_queue') || '[]'); } catch {}
+renderQueueBadge();
+
+// ── UI helpers ──────────────────────────────────────────────────────
+
+function setCount(n, cap) {
+  if (cap != null) capacity = cap;
+  count = Math.max(0, n);
+
+  const el = document.getElementById('count');
+  el.textContent = count;
+  el.classList.remove('bump');
+  void el.offsetWidth; // force reflow for animation restart
+  el.classList.add('bump');
+
+  const pct = capacity > 0 ? count / capacity : 0;
+  document.getElementById('bar').style.width = Math.min(100, pct * 100) + '%';
+  document.getElementById('cap-label').textContent = `${count} / ${capacity}`;
+
+  const body = document.body;
+  body.classList.remove('state-warn', 'state-danger');
+  if (pct >= 1)   body.classList.add('state-danger');
+  else if (pct >= 0.8) body.classList.add('state-warn');
+
+  triggerAlert(pct >= 1);
+}
+
+function triggerAlert(active) {
+  if (active && !alertActive) {
+    if (navigator.vibrate) navigator.vibrate([300, 100, 300, 100, 300]);
+    document.getElementById('alert-overlay').classList.add('show');
+  } else if (!active) {
+    document.getElementById('alert-overlay').classList.remove('show');
+  }
+  alertActive = active;
+}
+
+function setOnline(online) {
+  document.getElementById('dot').className = online ? 'online' : 'offline';
+  document.getElementById('status-text').textContent = online ? 'En ligne' : 'Hors ligne';
+}
+
+function renderQueueBadge() {
+  const badge = document.getElementById('queue-badge');
+  if (queue.length > 0) {
+    badge.style.display = 'inline';
+    badge.textContent = `${queue.length} en attente`;
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+// ── Core: send an operation ──────────────────────────────────────────
+
+function tap(delta) {
+  const uuid = crypto.randomUUID();
+  setCount(count + delta); // optimistic
+  sendOp({ delta, uuid });
+}
+
+function fetchWithTimeout(url, opts, ms = 5000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  return fetch(url, { ...opts, signal: ctrl.signal })
+    .finally(() => clearTimeout(timer));
+}
+
+async function sendOp(op) {
+  try {
+    const res = await fetchWithTimeout('/api/count', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(op),
+    });
+    const data = await res.json();
+    if (!data.dup) setCount(data.count);
+    triggerAlert(data.alert);
+  } catch {
+    // Network failure — queue and retry when online
+    queue.push(op);
+    localStorage.setItem('op_queue', JSON.stringify(queue));
+    renderQueueBadge();
+    setOnline(false);
+  }
+}
+
+async function flushQueue() {
+  while (queue.length > 0) {
+    const op = queue[0];
+    try {
+      const res = await fetchWithTimeout('/api/count', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(op),
+      });
+      const data = await res.json();
+      queue.shift();
+      localStorage.setItem('op_queue', JSON.stringify(queue));
+      renderQueueBadge();
+      if (!data.dup) setCount(data.count);
+    } catch {
+      break; // still offline, stop trying
+    }
+  }
+  if (queue.length === 0) setOnline(true);
+}
+
+// Flush on reconnect events
+window.addEventListener('online', flushQueue);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && queue.length > 0) flushQueue();
+});
+setInterval(() => { if (navigator.onLine && queue.length > 0) flushQueue(); }, 2000);
+
+// ── WebSocket — real-time sync ──────────────────────────────────────
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${proto}//${location.host}`);
+
+  ws.onopen = () => { setOnline(true); flushQueue(); };
+
+  ws.onmessage = ({ data }) => {
+    const msg = JSON.parse(data);
+    if (msg.type === 'init' || msg.type === 'update') {
+      setCount(msg.count, msg.capacity);
+      if (msg.alert) triggerAlert(true);
+    }
+    if (msg.type === 'config') {
+      setCount(msg.count ?? count, msg.capacity);
+    }
+  };
+
+  ws.onclose = () => {
+    setOnline(false);
+    setTimeout(connect, 2000);
+  };
+  ws.onerror = () => ws.close();
+}
+
+// Boot: fetch initial state then open WebSocket
+fetchWithTimeout('/api/state')
+  .then(r => r.json())
+  .then(d => setCount(d.count, d.capacity))
+  .catch(() => {})
+  .finally(connect);
+</script>
+</body>
+</html>

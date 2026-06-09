@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Stats – Compteur</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --surface: #1e293b;
+      --border: #334155;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --accent: #3b82f6;
+      --ok: #22c55e;
+      --warn: #f59e0b;
+      --danger: #ef4444;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, sans-serif;
+      min-height: 100dvh;
+      padding: 16px;
+      max-width: 700px;
+      margin: 0 auto;
+    }
+    h1 { font-size: 22px; font-weight: 800; margin-bottom: 20px; }
+    h2 {
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+    /* Login */
+    input[type="password"] {
+      width: 100%;
+      padding: 11px 14px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 16px;
+      margin-bottom: 8px;
+      outline: none;
+    }
+    input:focus { border-color: var(--accent); }
+    button {
+      width: 100%;
+      padding: 12px;
+      border-radius: 10px;
+      border: none;
+      background: var(--accent);
+      color: #fff;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .toast {
+      padding: 9px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      text-align: center;
+      margin-top: 8px;
+      display: none;
+    }
+    .toast.err { background: rgba(239,68,68,0.15); color: var(--danger); }
+    /* Stat grid */
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    @media (min-width: 420px) { .stat-grid { grid-template-columns: repeat(4, 1fr); } }
+    .stat-tile {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px 10px;
+      text-align: center;
+    }
+    .stat-val {
+      font-size: 34px;
+      font-weight: 900;
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
+    }
+    .stat-lbl { font-size: 11px; color: var(--muted); margin-top: 5px; text-transform: uppercase; letter-spacing: 0.05em; }
+    /* Live dot */
+    .live-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      color: var(--ok);
+      margin-bottom: 10px;
+    }
+    .live-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--ok);
+      box-shadow: 0 0 5px var(--ok);
+      animation: blink 1.5s ease-in-out infinite;
+    }
+    @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+    /* Chart */
+    .chart-wrap { position: relative; height: 240px; }
+    /* Visibility of sections */
+    #login-view { }
+    #stats-view { display: none; }
+    /* Back link */
+    .back { font-size: 13px; color: var(--muted); margin-bottom: 16px; display: block; text-decoration: none; }
+    .back:hover { color: var(--text); }
+  </style>
+</head>
+<body>
+
+<!-- ── Login ── -->
+<div id="login-view">
+  <h1>Statistiques</h1>
+  <div class="card">
+    <h2>Connexion admin</h2>
+    <input type="password" id="code" placeholder="Code admin" autocomplete="current-password">
+    <button onclick="loadStats()">Accéder</button>
+    <div class="toast" id="err"></div>
+  </div>
+</div>
+
+<!-- ── Stats ── -->
+<div id="stats-view">
+  <a href="/admin.html" class="back">← Admin</a>
+  <h1>Statistiques en direct</h1>
+
+  <div class="live-badge"><div class="live-dot"></div> LIVE</div>
+
+  <div class="stat-grid">
+    <div class="stat-tile">
+      <div class="stat-val" id="s-count" style="color:var(--accent)">–</div>
+      <div class="stat-lbl">Présents</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-val" id="s-peak" style="color:var(--warn)">–</div>
+      <div class="stat-lbl">Pic</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-val" id="s-in" style="color:var(--ok)">–</div>
+      <div class="stat-lbl">Entrées</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-val" id="s-cap" style="color:var(--muted)">–</div>
+      <div class="stat-lbl">Capacité</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Évolution</h2>
+    <div class="chart-wrap">
+      <canvas id="chart"></canvas>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+let adminCode = '';
+let chart = null;
+let peak = 0;
+let totalIn = 0;
+let capacity = 100;
+
+function fmt(ts) {
+  return new Date(ts).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+}
+
+function fetchWithTimeout(url, opts, ms = 6000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(t));
+}
+
+// ── Login ──
+
+async function loadStats() {
+  const code = document.getElementById('code').value.trim();
+  if (!code) return;
+
+  const res = await fetchWithTimeout(`/api/history?code=${encodeURIComponent(code)}`);
+  if (!res.ok) {
+    const el = document.getElementById('err');
+    el.textContent = 'Code incorrect';
+    el.className = 'toast err';
+    el.style.display = 'block';
+    return;
+  }
+
+  adminCode = code;
+  const data = await res.json();
+
+  document.getElementById('login-view').style.display = 'none';
+  document.getElementById('stats-view').style.display = 'block';
+
+  capacity = data.capacity;
+  totalIn  = data.totalIn ?? 0;
+  peak     = data.history.length ? Math.max(...data.history.map(h => h.c), data.count) : data.count;
+
+  document.getElementById('s-cap').textContent = capacity;
+  document.getElementById('s-in').textContent  = totalIn;
+  updateCountDisplay(data.count);
+  buildChart(data.history, data.count, capacity);
+  connectWS();
+}
+
+document.getElementById('code').addEventListener('keydown', e => {
+  if (e.key === 'Enter') loadStats();
+});
+
+// ── Display ──
+
+function updateCountDisplay(count) {
+  document.getElementById('s-count').textContent = count;
+  if (count > peak) {
+    peak = count;
+    document.getElementById('s-peak').textContent = peak;
+  } else if (document.getElementById('s-peak').textContent === '–') {
+    document.getElementById('s-peak').textContent = peak;
+  }
+}
+
+// ── Chart ──
+
+function buildChart(history, currentCount, cap) {
+  const labels = history.map(h => fmt(h.t));
+  const values = history.map(h => h.c);
+
+  // Add current point
+  labels.push(fmt(Date.now()));
+  values.push(currentCount);
+
+  const ctx = document.getElementById('chart').getContext('2d');
+
+  chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Présents',
+          data: values,
+          borderColor: '#3b82f6',
+          backgroundColor: 'rgba(59,130,246,0.08)',
+          fill: true,
+          tension: 0.3,
+          pointRadius: 0,
+          pointHoverRadius: 4,
+          borderWidth: 2.5,
+        },
+        {
+          label: 'Capacité',
+          data: Array(labels.length).fill(cap),
+          borderColor: 'rgba(239,68,68,0.55)',
+          borderDash: [6, 4],
+          borderWidth: 1.5,
+          pointRadius: 0,
+          fill: false,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: {
+          labels: { color: '#94a3b8', boxWidth: 12, font: { size: 12 } },
+        },
+        tooltip: {
+          backgroundColor: '#1e293b',
+          borderColor: '#334155',
+          borderWidth: 1,
+          titleColor: '#f8fafc',
+          bodyColor: '#94a3b8',
+        },
+      },
+      scales: {
+        x: {
+          ticks: { color: '#64748b', maxTicksLimit: 7, font: { size: 11 } },
+          grid:  { color: '#1e293b' },
+        },
+        y: {
+          beginAtZero: true,
+          ticks: { color: '#64748b', font: { size: 11 } },
+          grid:  { color: '#334155' },
+        },
+      },
+    },
+  });
+}
+
+function pushPoint(count) {
+  if (!chart) return;
+  const MAX_POINTS = 300;
+  const ds = chart.data;
+  ds.labels.push(fmt(Date.now()));
+  ds.datasets[0].data.push(count);
+  // Extend capacity line
+  ds.datasets[1].data.push(capacity);
+  if (ds.labels.length > MAX_POINTS) {
+    ds.labels.shift();
+    ds.datasets[0].data.shift();
+    ds.datasets[1].data.shift();
+  }
+  chart.update('none');
+}
+
+// ── WebSocket ──
+
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${proto}//${location.host}`);
+
+  ws.onmessage = ({ data }) => {
+    const msg = JSON.parse(data);
+    if (msg.type === 'update') {
+      updateCountDisplay(msg.count);
+      totalIn += (msg.delta > 0 ? msg.delta : 0);
+      document.getElementById('s-in').textContent = totalIn;
+      pushPoint(msg.count);
+    }
+    if (msg.type === 'config') {
+      capacity = msg.capacity;
+      if (msg.count != null) updateCountDisplay(msg.count);
+      document.getElementById('s-cap').textContent = capacity;
+      if (chart) {
+        chart.data.datasets[1].data = Array(chart.data.labels.length).fill(capacity);
+        chart.update('none');
+      }
+    }
+  };
+
+  ws.onclose = () => setTimeout(connectWS, 2000);
+  ws.onerror  = () => ws.close();
+}
+</script>
+</body>
+</html>
