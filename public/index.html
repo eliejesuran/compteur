@@ -17,6 +17,26 @@
       --blue: #3b82f6;
       --text: #f9fafb;
       --muted: #6b7280;
+      --track: #374151;
+      --btn-border: #374151;
+      --btn-color: #9ca3af;
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f9fafb;
+        --surface: #ffffff;
+        --ok: #16a34a;
+        --warn: #d97706;
+        --danger: #dc2626;
+        --blue: #2563eb;
+        --text: #111827;
+        --muted: #6b7280;
+        --track: #e5e7eb;
+        --btn-border: #d1d5db;
+        --btn-color: #4b5563;
+      }
+      .btn-small:active { background: #e5e7eb !important; color: #111827 !important; border-color: #9ca3af !important; }
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
@@ -109,7 +129,7 @@
     #bar-wrap {
       width: min(65%, 280px);
       height: 6px;
-      background: #374151;
+      background: var(--track);
       border-radius: 3px;
       margin-top: 14px;
       overflow: hidden;
@@ -164,10 +184,10 @@
     .btn-small {
       flex: 1;
       height: 46px;
-      border: 1.5px solid #374151;
+      border: 1.5px solid var(--btn-border);
       border-radius: 12px;
       background: transparent;
-      color: #9ca3af;
+      color: var(--btn-color);
       font-size: 15px;
       font-weight: 700;
       cursor: pointer;
@@ -175,6 +195,11 @@
       transition: background 0.1s, color 0.1s, border-color 0.1s;
     }
     .btn-small:active { background: #374151; color: #fff; border-color: #4b5563; }
+
+    /* +1 légèrement plus large sur écrans tactiles */
+    @media (pointer: coarse) {
+      #main-btns { grid-template-columns: 1.18fr 1fr; }
+    }
 
     /* ── Alert overlay ── */
     #alert-overlay {

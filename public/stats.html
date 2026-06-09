@@ -17,6 +17,19 @@
       --warn: #f59e0b;
       --danger: #ef4444;
     }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f8fafc;
+        --surface: #ffffff;
+        --border: #e2e8f0;
+        --text: #0f172a;
+        --muted: #64748b;
+        --accent: #2563eb;
+        --ok: #16a34a;
+        --warn: #d97706;
+        --danger: #dc2626;
+      }
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       background: var(--bg);
@@ -180,6 +193,15 @@ let peak = 0;
 let totalIn = 0;
 let capacity = 100;
 
+function isLight() {
+  return window.matchMedia('(prefers-color-scheme: light)').matches;
+}
+function chartPalette() {
+  return isLight()
+    ? { tick: '#64748b', gridX: '#f1f5f9', gridY: '#e2e8f0', tooltipBg: '#ffffff', tooltipBorder: '#e2e8f0', tooltipTitle: '#0f172a', tooltipBody: '#64748b', legend: '#64748b' }
+    : { tick: '#64748b', gridX: '#1e293b', gridY: '#334155', tooltipBg: '#1e293b', tooltipBorder: '#334155', tooltipTitle: '#f8fafc', tooltipBody: '#94a3b8', legend: '#94a3b8' };
+}
+
 function fmt(ts) {
   return new Date(ts).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
 }
@@ -250,6 +272,7 @@ function buildChart(history, currentCount, cap) {
 
   const ctx = document.getElementById('chart').getContext('2d');
 
+  const p = chartPalette();
   chart = new Chart(ctx, {
     type: 'line',
     data: {
@@ -284,28 +307,42 @@ function buildChart(history, currentCount, cap) {
       interaction: { mode: 'index', intersect: false },
       plugins: {
         legend: {
-          labels: { color: '#94a3b8', boxWidth: 12, font: { size: 12 } },
+          labels: { color: p.legend, boxWidth: 12, font: { size: 12 } },
         },
         tooltip: {
-          backgroundColor: '#1e293b',
-          borderColor: '#334155',
+          backgroundColor: p.tooltipBg,
+          borderColor: p.tooltipBorder,
           borderWidth: 1,
-          titleColor: '#f8fafc',
-          bodyColor: '#94a3b8',
+          titleColor: p.tooltipTitle,
+          bodyColor: p.tooltipBody,
         },
       },
       scales: {
         x: {
-          ticks: { color: '#64748b', maxTicksLimit: 7, font: { size: 11 } },
-          grid:  { color: '#1e293b' },
+          ticks: { color: p.tick, maxTicksLimit: 7, font: { size: 11 } },
+          grid:  { color: p.gridX },
         },
         y: {
           beginAtZero: true,
-          ticks: { color: '#64748b', font: { size: 11 } },
-          grid:  { color: '#334155' },
+          ticks: { color: p.tick, font: { size: 11 } },
+          grid:  { color: p.gridY },
         },
       },
     },
+  });
+
+  window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
+    const np = chartPalette();
+    chart.options.plugins.legend.labels.color = np.legend;
+    chart.options.plugins.tooltip.backgroundColor = np.tooltipBg;
+    chart.options.plugins.tooltip.borderColor = np.tooltipBorder;
+    chart.options.plugins.tooltip.titleColor = np.tooltipTitle;
+    chart.options.plugins.tooltip.bodyColor = np.tooltipBody;
+    chart.options.scales.x.ticks.color = np.tick;
+    chart.options.scales.x.grid.color = np.gridX;
+    chart.options.scales.y.ticks.color = np.tick;
+    chart.options.scales.y.grid.color = np.gridY;
+    chart.update('none');
   });
 }
 

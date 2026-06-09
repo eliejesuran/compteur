@@ -37,6 +37,8 @@ GET  /api/ips?code=X         → {ips: string[], port}
 - **Persistance disk** toutes les 30s → résiste à un redémarrage serveur en cours d'événement.
 - **seenOps** trimmé à 10k entrées quand >20k → mémoire bornée pour les longues soirées.
 - `Math.max(0, count + delta)` côté serveur ET client → jamais négatif.
+- **Thème** : suit automatiquement le thème OS via `prefers-color-scheme`. Variables CSS redéfinies dans `@media (prefers-color-scheme: light)` sur les 3 pages. Les couleurs du graphique Chart.js sont recalculées via `chartPalette()` et mises à jour dynamiquement si le thème change pendant la session.
+- **Bouton +1 plus large sur mobile** : sur écrans tactiles (`pointer: coarse`), la grille des boutons principaux passe à `grid-template-columns: 1.18fr 1fr` → le bouton +1 est ~18 % plus large que −1. Choix intentionnel : l'entrée est l'action principale.
 
 ## Démarrage
 ```bash
@@ -47,6 +49,34 @@ npm start
 
 ## Code admin par défaut
 `admin123` — à changer via `/admin.html` avant l'événement.
+
+## Limitations estimées
+
+### Appareils connectés (WebSocket)
+| Clients WS | Comportement |
+|---|---|
+| < 200 | Fluide, broadcast <1 ms |
+| 200 – 500 | Acceptable, latence broadcast ~2-5 ms par op |
+| > 500 | Broadcast O(n) devient sensible ; envisager throttle |
+| > 2 000 | Risque OOM (~100 KB/client) sur machine 512 MB |
+
+Le vrai goulot : chaque appui déclenche `broadcast()` qui itère **tous** les clients en boucle synchrone. Avec 100 opérateurs tapant à 2 taps/s + 100 clients WS → ~20 000 envois/s, gérable. À 500 opérateurs × 2 taps/s → 500 000 envois/s → saturation du event loop Node.js.
+
+### Opérations (+1/−1)
+| Volume | Comportement |
+|---|---|
+| < 100 ops/s | Imperceptible (typique pour un événement humain) |
+| 100 – 500 ops/s | Toujours OK, Set.has/add O(1) |
+| 500 – 5 000 ops/s | `trimSeenOps` à 20k → 10k déclenché souvent ; légère pause |
+| > 10 000 ops/s | Saturation event loop, timeouts clients |
+
+### Historique & mémoire
+- `seenOps` Set : plafonné à ~20k UUID (~2 MB), trimmé automatiquement.
+- `state.history` : plafonné à 2 880 points (24h à 30s). Environ 86 KB.
+- `writeFileSync` toutes les 30s : bloque l'event loop ~1 ms (JSON de quelques KB) — non problématique.
+
+### En pratique pour un événement type
+Un PC modeste (2 cœurs, 1 GB RAM) tient sans problème **50 opérateurs simultanés** avec **100-200 spectateurs** connectés. Limite réelle : le WiFi et le débit upload du PC hôte, pas Node.js.
 
 ## Déploiement
 - **Local (recommandé)** : PC sur le même WiFi que les opérateurs. L'URL est `http://<IP>:3000`.
