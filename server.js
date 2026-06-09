@@ -26,28 +26,6 @@ let state = {
 };
 const seenOps = new Set(); // UUID dedup — prevents double-count on retries
 
-// Restore persisted state on startup
-if (fs.existsSync(STATE_FILE)) {
-  try {
-    const saved = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-    Object.assign(state, saved);
-    console.log(`État restauré : ${state.count} personnes (capacité : ${state.capacity})`);
-  } catch (e) {
-    console.warn('Impossible de lire state.json, état réinitialisé.');
-  }
-}
-
-// Persist state to disk every 30s (crash recovery)
-setInterval(() => {
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state), 'utf8');
-}, 30000);
-
-// Record one history point every 30s
-setInterval(() => {
-  state.history.push({ t: Date.now(), c: state.count });
-  if (state.history.length > 2880) state.history.shift(); // 24h max
-}, 30000);
-
 // --- Helpers ---
 function broadcast(data) {
   const msg = JSON.stringify(data);
@@ -158,15 +136,41 @@ wss.on('connection', (ws) => {
 // --- Start ---
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
-server.listen(PORT, '0.0.0.0', () => {
-  const ips = getLocalIPs();
-  console.log('\n╔══════════════════════════════════════╗');
-  console.log('║      COMPTEUR ÉVÉNEMENT  v1.0        ║');
-  console.log('╠══════════════════════════════════════╣');
-  console.log(`║  Local   : http://localhost:${PORT}       ║`);
-  ips.forEach(ip => console.log(`║  Réseau  : http://${ip}:${PORT}  ║`));
-  console.log(`║                                      ║`);
-  console.log(`║  Code admin : ${state.adminCode.padEnd(22)}║`);
-  console.log(`║  Admin   : http://localhost:${PORT}/admin ║`);
-  console.log('╚══════════════════════════════════════╝\n');
-});
+if (require.main === module) {
+  // Restore persisted state on startup
+  if (fs.existsSync(STATE_FILE)) {
+    try {
+      const saved = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+      Object.assign(state, saved);
+      console.log(`État restauré : ${state.count} personnes (capacité : ${state.capacity})`);
+    } catch (e) {
+      console.warn('Impossible de lire state.json, état réinitialisé.');
+    }
+  }
+
+  // Persist state to disk every 30s (crash recovery)
+  setInterval(() => {
+    fs.writeFileSync(STATE_FILE, JSON.stringify(state), 'utf8');
+  }, 30000);
+
+  // Record one history point every 30s
+  setInterval(() => {
+    state.history.push({ t: Date.now(), c: state.count });
+    if (state.history.length > 2880) state.history.shift();
+  }, 30000);
+
+  server.listen(PORT, '0.0.0.0', () => {
+    const ips = getLocalIPs();
+    console.log('\n╔══════════════════════════════════════╗');
+    console.log('║      COMPTEUR ÉVÉNEMENT  v1.0        ║');
+    console.log('╠══════════════════════════════════════╣');
+    console.log(`║  Local   : http://localhost:${PORT}       ║`);
+    ips.forEach(ip => console.log(`║  Réseau  : http://${ip}:${PORT}  ║`));
+    console.log(`║                                      ║`);
+    console.log(`║  Code admin : ${state.adminCode.padEnd(22)}║`);
+    console.log(`║  Admin   : http://localhost:${PORT}/admin ║`);
+    console.log('╚══════════════════════════════════════╝\n');
+  });
+}
+
+module.exports = { app, server, state, seenOps, trimSeenOps };
