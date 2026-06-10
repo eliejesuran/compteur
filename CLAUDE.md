@@ -9,14 +9,16 @@ Node.js 18+ · Express · ws (WebSocket) · qrcode · Chart.js (CDN) · Vanilla 
 | `server.js` | Serveur HTTP + WebSocket, état, API |
 | `public/index.html` | Page compteur (opérateurs) : +1/−1/+5/−5 |
 | `public/admin.html` | Panel admin : QR code, capacité, reset, code |
-| `public/stats.html` | Graphiques temps réel (Chart.js) |
+| `public/stats.html` | Graphiques temps réel (Chart.js) + stats par opérateur |
+| `public/manifest.json` | Manifest PWA — installable sur mobile |
+| `public/icon.svg` | Icône de l'app (PWA) |
 | `state.json` | État persisté automatiquement (ne pas éditer à la main) |
 
 ## API
 ```
-POST /api/count              {delta: ±1|±5, uuid: string} → {count, dup?, alert?}
+POST /api/count              {delta: ±1|±5, uuid: string, name?: string} → {count, dup?, alert?}
 GET  /api/state              → {count, capacity}
-GET  /api/history?code=X     → {history:[{t,c}], count, capacity, totalIn, totalOut}
+GET  /api/history?code=X     → {history:[{t,c}], count, capacity, totalIn, totalOut, opStats}
 GET  /api/clients?code=X     → {clients:[{name, connectedAt}]}
 POST /api/admin/config       {code, capacity?, newCode?, reset?} → {ok, capacity}
 GET  /api/qr?code=X          → {qr: dataURL, url}
@@ -26,8 +28,8 @@ GET  /api/ips?code=X         → {ips: string[], port}
 ## WebSocket (server → clients)
 | type | champs | déclencheur |
 |---|---|---|
-| `init` | count, capacity | connexion d'un client |
-| `update` | count, delta, alert, capacity | opération reçue |
+| `init` | count, capacity, opStats | connexion d'un client |
+| `update` | count, delta, alert, capacity, opStats | opération reçue |
 | `config` | capacity | changement de config admin |
 | `clients` | names: string[] | connexion ou déconnexion d'un opérateur nommé |
 
@@ -47,15 +49,40 @@ GET  /api/ips?code=X         → {ips: string[], port}
 - **Thème** : suit automatiquement le thème OS via `prefers-color-scheme`. Variables CSS redéfinies dans `@media (prefers-color-scheme: light)` sur les 3 pages. Les couleurs du graphique Chart.js sont recalculées via `chartPalette()` et mises à jour dynamiquement si le thème change pendant la session.
 - **Bouton +1 plus large sur mobile** : sur écrans tactiles (`pointer: coarse`), la grille des boutons principaux passe à `grid-template-columns: 1.18fr 1fr` → le bouton +1 est ~18 % plus large que −1. Choix intentionnel : l'entrée est l'action principale.
 - **Identité opérateur** : à la première connexion, un overlay plein écran demande le prénom. Stocké dans `localStorage('op_name')`. Envoyé au serveur via `{type:'hello', name}` à chaque reconnexion WS. Le serveur tient un `Map<ws, {name, connectedAt}>` et broadcast `{type:'clients', names:[]}` dès qu'un opérateur se connecte ou déconnecte. L'admin voit la liste en temps réel. Les noms sont dédupliqués (plusieurs onglets = 1 seul badge).
-- **Pas de nom dans les opérations** : le POST `/api/count` ne transporte pas le nom — les opérations restent anonymes côté API. Le suivi par opérateur nécessiterait d'ajouter `name` aux payloads et de l'indexer dans l'historique (voir Améliorations).
+- **Stats par opérateur** : `POST /api/count` accepte un champ `name` optionnel. Le serveur agrège dans `state.opStats = {[name]: {in, out}}` et le broadcast dans chaque message `update` et `init`. `stats.html` affiche un tableau par opérateur trié par entrées décroissantes, mis à jour en temps réel. Le nom vient du `localStorage('op_name')` déjà connu.
+- **`pointerdown` pour les boutons** : les 4 boutons (+1/−1/+5/−5) utilisent `pointerdown` au lieu de `click`. Sur mobile, les taps rapides peuvent être fusionnés ou abandonnés par le navigateur au niveau `click` ; `pointerdown` capture chaque toucher immédiatement. `e.preventDefault()` bloque le `click` fantôme qui suivrait. Classe `.tapping` gérée manuellement pour le retour visuel (`:active` peut ne pas déclencher avec `preventDefault()` sur iOS).
+- **PWA** : `manifest.json` + `icon.svg` déclarent l'app installable sur Android/iOS. `theme-color` adapté au mode clair/sombre sur chaque page. L'app s'ouvre en `display: standalone` (sans barre d'URL) une fois installée.
 
 ## Améliorations prévues
 
-### Stats par opérateur (partie 2)
-- Ajouter `name` au payload `POST /api/count` et le stocker dans `state.history` : `{t, c, name}`
-- Endpoint `GET /api/history` retourne les entrées par opérateur
-- `stats.html` : vue globale (actuelle) + vue par opérateur (cliquer sur un badge pour filtrer le graphique)
-- Possibilité de désélectionner un opérateur pour l'exclure des stats affichées
+### Garder l'écran allumé (Wake Lock)
+- Utiliser l'API `navigator.wakeLock.request('screen')` dès que la page `index.html` est au premier plan.
+- Réacquérir le lock après `visibilitychange` (l'OS le libère automatiquement quand l'onglet passe en arrière-plan).
+- Fallback silencieux si l'API n'est pas supportée (pas d'erreur affichée à l'opérateur).
+
+### Bouton +1 plus haut sur mobile
+- Sur écrans tactiles (`pointer: coarse`), augmenter la hauteur minimale du bouton +1 (ex. `min-height: 30vh` ou valeur en `dvh`) pour qu'il soit plus facile à atteindre et à maintenir à un rythme soutenu.
+
+### Bouton admin (lien vers admin.html)
+- Ajouter un bouton/icône discret sur `index.html` pointant vers `/admin.html` (ex. coin en bas à droite, icône engrenage).
+- Le bouton reste visible mais non intrusif — l'admin peut naviguer sans mémoriser l'URL.
+
+### Persistance des opérateurs connectés (30 s)
+- Problème actuel : si un opérateur perd brièvement le réseau (tunnel instable, WiFi coupé 2 s), il disparaît de la liste WS et son badge s'efface côté admin.
+- Solution : garder un opérateur dans la liste pendant 30 s après sa déconnexion WS. Le serveur maintient un `Map<name, disconnectedAt>` ; il ne retire le nom du broadcast `clients` que si `Date.now() - disconnectedAt > 30_000`. À la reconnexion, la grâce est annulée immédiatement.
+
+### Scanner le QR code depuis mobile (opérateur)
+- Sur `index.html`, ajouter un bouton "Scanner un QR code" (icône caméra) qui ouvre `navigator.mediaDevices` pour lire un QR code via la caméra arrière.
+- Utile quand un opérateur rejoint en cours d'événement sans avoir l'URL : il scanne l'écran de l'admin au lieu de taper l'URL à la main.
+- Bibliothèque légère : `jsQR` (CDN, ~35 KB) ou `ZXing-js`. Pas de build nécessaire.
+- Fallback : si la caméra n'est pas disponible (desktop), masquer le bouton.
+
+### Sessions de comptage multiples (admin)
+- Permettre de gérer plusieurs sessions indépendantes (ex. "Entrée principale", "Entrée secondaire") depuis un seul serveur.
+- Chaque session a son propre `count`, `capacity`, `history`, `opStats`, `adminCode`.
+- API : ajouter un segment `sessionId` aux routes (`/api/:session/count`, etc.) ou un header.
+- Admin : page de gestion des sessions — créer, renommer, archiver, changer de session active. Les opérateurs rejoignent une session via son QR code dédié.
+- Complexité notable : le state devient `{sessions: {[id]: SessionState}}`, la persistance et les broadcasts sont scopés par session.
 
 ## Démarrage
 ```bash

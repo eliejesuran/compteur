@@ -23,6 +23,7 @@ let state = {
   capacity: 100,
   adminCode: 'admin123',
   history: [], // [{t: timestamp_ms, c: count}]
+  opStats: {}, // {name: {in: 0, out: 0}} — entrées/sorties par opérateur
 };
 const seenOps = new Set(); // UUID dedup — prevents double-count on retries
 const wsClients = new Map(); // ws → {name: null|string, connectedAt: number}
@@ -68,7 +69,7 @@ function trimSeenOps() {
 
 // Apply a delta operation (core endpoint — must be fast and idempotent)
 app.post('/api/count', (req, res) => {
-  const { delta, uuid } = req.body ?? {};
+  const { delta, uuid, name } = req.body ?? {};
 
   if (typeof uuid !== 'string' || !uuid) return res.status(400).json({ error: 'uuid required' });
   if (![-5, -1, 1, 5].includes(delta)) return res.status(400).json({ error: 'invalid delta' });
@@ -83,8 +84,17 @@ app.post('/api/count', (req, res) => {
   if (delta > 0) state.totalIn += delta;
   else state.totalOut += Math.abs(delta);
 
+  if (typeof name === 'string') {
+    const n = name.trim().slice(0, 32);
+    if (n) {
+      if (!state.opStats[n]) state.opStats[n] = { in: 0, out: 0 };
+      if (delta > 0) state.opStats[n].in += delta;
+      else state.opStats[n].out += Math.abs(delta);
+    }
+  }
+
   const alert = state.count >= state.capacity;
-  broadcast({ type: 'update', count: state.count, delta, alert, capacity: state.capacity });
+  broadcast({ type: 'update', count: state.count, delta, alert, capacity: state.capacity, opStats: state.opStats });
   res.json({ count: state.count, alert });
 });
 
@@ -102,6 +112,7 @@ app.get('/api/history', (req, res) => {
     capacity: state.capacity,
     totalIn: state.totalIn,
     totalOut: state.totalOut,
+    opStats: state.opStats,
   });
 });
 
@@ -117,6 +128,7 @@ app.post('/api/admin/config', (req, res) => {
     state.totalIn = 0;
     state.totalOut = 0;
     state.history = [];
+    state.opStats = {};
     seenOps.clear();
     fs.writeFileSync(STATE_FILE, JSON.stringify(state), 'utf8');
   }
@@ -153,7 +165,7 @@ app.get('/api/ips', (req, res) => {
 // --- WebSocket ---
 wss.on('connection', (ws) => {
   wsClients.set(ws, { name: null, connectedAt: Date.now() });
-  ws.send(JSON.stringify({ type: 'init', count: state.count, capacity: state.capacity }));
+  ws.send(JSON.stringify({ type: 'init', count: state.count, capacity: state.capacity, opStats: state.opStats }));
 
   // Envoyer la liste courante immédiatement (utile pour la page admin qui vient de s'ouvrir)
   const currentNames = [...new Set(

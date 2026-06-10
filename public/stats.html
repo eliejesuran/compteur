@@ -3,6 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#0f172a" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f8fafc" media="(prefers-color-scheme: light)">
   <title>Stats – Compteur</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
   <style>
@@ -136,6 +139,13 @@
     /* Back link */
     .back { font-size: 13px; color: var(--muted); margin-bottom: 16px; display: block; text-decoration: none; }
     .back:hover { color: var(--text); }
+    /* Per-operator */
+    .op-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
+    .op-row:last-child { border-bottom: none; }
+    .op-name { flex: 1; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .op-in   { color: var(--ok);     font-weight: 700; font-variant-numeric: tabular-nums; min-width: 44px; text-align: right; }
+    .op-out  { color: var(--danger); font-weight: 700; font-variant-numeric: tabular-nums; min-width: 44px; text-align: right; }
+    .op-net  { color: var(--muted);  font-size: 12px;  min-width: 52px; text-align: right; }
   </style>
 </head>
 <body>
@@ -183,6 +193,11 @@
       <canvas id="chart"></canvas>
     </div>
   </div>
+
+  <div class="card" id="op-card" style="display:none">
+    <h2>Par opérateur</h2>
+    <div id="op-list"></div>
+  </div>
 </div>
 
 <script>
@@ -192,6 +207,29 @@ let chart = null;
 let peak = 0;
 let totalIn = 0;
 let capacity = 100;
+let opStats = {};
+
+function esc(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function renderOpStats(stats) {
+  opStats = stats || {};
+  const entries = Object.entries(opStats)
+    .filter(([, s]) => s.in > 0 || s.out > 0)
+    .sort((a, b) => b[1].in - a[1].in);
+  const card = document.getElementById('op-card');
+  if (entries.length === 0) { card.style.display = 'none'; return; }
+  card.style.display = '';
+  document.getElementById('op-list').innerHTML = entries.map(([name, s]) =>
+    `<div class="op-row">
+      <span class="op-name">${esc(name)}</span>
+      <span class="op-in">+${s.in}</span>
+      <span class="op-out">−${s.out}</span>
+      <span class="op-net">${s.in - s.out} net</span>
+    </div>`
+  ).join('');
+}
 
 function isLight() {
   return window.matchMedia('(prefers-color-scheme: light)').matches;
@@ -241,6 +279,7 @@ async function loadStats() {
   document.getElementById('s-in').textContent  = totalIn;
   updateCountDisplay(data.count);
   buildChart(data.history, data.count, capacity);
+  if (data.opStats) renderOpStats(data.opStats);
   connectWS();
 }
 
@@ -375,6 +414,7 @@ function connectWS() {
       totalIn += (msg.delta > 0 ? msg.delta : 0);
       document.getElementById('s-in').textContent = totalIn;
       pushPoint(msg.count);
+      if (msg.opStats) renderOpStats(msg.opStats);
     }
     if (msg.type === 'config') {
       capacity = msg.capacity;

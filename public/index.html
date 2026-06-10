@@ -6,6 +6,9 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#111827" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f9fafb" media="(prefers-color-scheme: light)">
   <title>Compteur</title>
   <style>
     :root {
@@ -36,7 +39,7 @@
         --btn-border: #d1d5db;
         --btn-color: #4b5563;
       }
-      .btn-small:active { background: #e5e7eb !important; color: #111827 !important; border-color: #9ca3af !important; }
+      .btn-small:active, .btn-small.tapping { background: #e5e7eb !important; color: #111827 !important; border-color: #9ca3af !important; }
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
@@ -183,7 +186,7 @@
       transition: transform 0.08s, filter 0.08s;
       letter-spacing: -0.02em;
     }
-    .btn-main:active { transform: scale(0.94); filter: brightness(0.8); }
+    .btn-main:active, .btn-main.tapping { transform: scale(0.94); filter: brightness(0.8); }
     #btn-p { background: #1d4ed8; }
     #btn-m { background: #991b1b; }
 
@@ -209,7 +212,7 @@
       touch-action: manipulation;
       transition: background 0.1s, color 0.1s, border-color 0.1s;
     }
-    .btn-small:active { background: #374151; color: #fff; border-color: #4b5563; }
+    .btn-small:active, .btn-small.tapping { background: #374151; color: #fff; border-color: #4b5563; }
 
     /* +1 légèrement plus large sur écrans tactiles */
     @media (pointer: coarse) {
@@ -296,13 +299,13 @@
 </div>
 
 <div id="main-btns">
-  <button class="btn-main" id="btn-p" onclick="tap(1)">+1</button>
-  <button class="btn-main" id="btn-m" onclick="tap(-1)">−1</button>
+  <button class="btn-main" id="btn-p">+1</button>
+  <button class="btn-main" id="btn-m">−1</button>
 </div>
 
 <div id="small-btns">
-  <button class="btn-small" onclick="tap(5)">+5</button>
-  <button class="btn-small" onclick="tap(-5)">−5</button>
+  <button class="btn-small" id="btn-p5">+5</button>
+  <button class="btn-small" id="btn-m5">−5</button>
 </div>
 
 <div id="alert-overlay"></div>
@@ -426,7 +429,9 @@ function tap(delta) {
   setCount(count + delta); // optimistic
   // Toujours passer par la queue — garantit qu'aucun tap n'est perdu
   // même en cas d'appuis rapides ou de réseau instable.
-  queue.push({ delta, uuid });
+  const op = { delta, uuid };
+  if (opName) op.name = opName;
+  queue.push(op);
   localStorage.setItem('op_queue', JSON.stringify(queue));
   renderQueueBadge();
   flush();
@@ -514,6 +519,25 @@ function connect() {
   };
   ws.onerror = () => ws.close();
 }
+
+// ── Tap binding — pointerdown plutôt que click : capture chaque toucher
+// immédiatement, sans le délai ou la fusion que le navigateur applique
+// aux clicks rapides sur mobile.
+function bindTapBtn(el, delta) {
+  el.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    el.classList.add('tapping');
+    tap(delta);
+  });
+  const clearTapping = () => el.classList.remove('tapping');
+  el.addEventListener('pointerup',     clearTapping);
+  el.addEventListener('pointercancel', clearTapping);
+  el.addEventListener('pointerleave',  clearTapping);
+}
+bindTapBtn(document.getElementById('btn-p'),   1);
+bindTapBtn(document.getElementById('btn-m'),  -1);
+bindTapBtn(document.getElementById('btn-p5'),  5);
+bindTapBtn(document.getElementById('btn-m5'), -5);
 
 // Boot: fetch initial state then open WebSocket
 fetchWithTimeout('/api/state')
