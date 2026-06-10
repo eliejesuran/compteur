@@ -10,6 +10,7 @@
   <meta name="theme-color" content="#111827" media="(prefers-color-scheme: dark)">
   <meta name="theme-color" content="#f9fafb" media="(prefers-color-scheme: light)">
   <title>Compteur</title>
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
   <style>
     :root {
       --bg: #111827;
@@ -110,6 +111,60 @@
       flex-shrink: 0;
     }
     #op-name-btn:active { background: rgba(59,130,246,0.25); }
+
+    #scan-btn {
+      display: none;
+      width: 32px; height: 32px;
+      border: none; background: none;
+      padding: 0; cursor: pointer;
+      color: var(--muted);
+      flex-shrink: 0;
+      touch-action: manipulation;
+      margin-left: 8px;
+    }
+    #scan-btn svg { display: block; }
+    #scan-btn:active { color: var(--blue); }
+
+    /* Scanner overlay */
+    #scan-overlay {
+      display: none;
+      position: fixed; inset: 0;
+      background: #000;
+      z-index: 300;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+    #scan-overlay.open { display: flex; }
+    #scan-video {
+      width: 100%; max-width: 480px;
+      border-radius: 0;
+    }
+    #scan-reticle {
+      position: absolute;
+      width: min(65vw, 260px); height: min(65vw, 260px);
+      border: 3px solid rgba(255,255,255,0.8);
+      border-radius: 18px;
+      pointer-events: none;
+    }
+    #scan-hint {
+      position: absolute;
+      bottom: max(80px, env(safe-area-inset-bottom) + 60px);
+      color: rgba(255,255,255,0.65);
+      font-size: 13px;
+      text-align: center;
+      padding: 0 24px;
+    }
+    #scan-close {
+      position: absolute;
+      top: max(16px, env(safe-area-inset-top) + 8px);
+      right: 16px;
+      width: 40px; height: 40px;
+      border: none; border-radius: 999px;
+      background: rgba(255,255,255,0.15);
+      color: #fff; font-size: 20px;
+      cursor: pointer; touch-action: manipulation;
+    }
 
     /* ── Count area ── */
     #count-area {
@@ -297,6 +352,23 @@
   <button id="op-name-btn" onclick="editName()"></button>
   <span id="queue-badge"></span>
   <span id="cap-label">– / –</span>
+  <button id="scan-btn" onclick="openScanner()" title="Scanner un QR code" aria-label="Scanner un QR code">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/>
+      <path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/>
+      <rect x="7" y="7" width="3" height="3"/><rect x="14" y="7" width="3" height="3"/>
+      <rect x="7" y="14" width="3" height="3"/><rect x="14" y="14" width="3" height="3"/>
+    </svg>
+  </button>
+</div>
+
+<!-- Scanner overlay -->
+<div id="scan-overlay">
+  <video id="scan-video" autoplay muted playsinline></video>
+  <canvas id="scan-canvas" style="display:none"></canvas>
+  <div id="scan-reticle"></div>
+  <div id="scan-hint">Pointez la caméra vers le QR code</div>
+  <button id="scan-close" onclick="closeScanner()">✕</button>
 </div>
 
 <div id="count-area">
@@ -574,6 +646,83 @@ bindTapBtn(document.getElementById('btn-p'),   1);
 bindTapBtn(document.getElementById('btn-m'),  -1);
 bindTapBtn(document.getElementById('btn-p5'),  5);
 bindTapBtn(document.getElementById('btn-m5'), -5);
+
+// ── QR Scanner ─────────────────────────────────────────────────────
+
+let scanStream = null;
+let scanRaf = null;
+
+function initScanBtn() {
+  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+    document.getElementById('scan-btn').style.display = 'block';
+  }
+}
+
+async function openScanner() {
+  const overlay = document.getElementById('scan-overlay');
+  const video   = document.getElementById('scan-video');
+  overlay.classList.add('open');
+  try {
+    scanStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' } },
+      audio: false,
+    });
+    video.srcObject = scanStream;
+    video.play();
+    video.addEventListener('loadedmetadata', startScanLoop, { once: true });
+  } catch {
+    document.getElementById('scan-hint').textContent = 'Caméra non accessible';
+  }
+}
+
+function startScanLoop() {
+  const video  = document.getElementById('scan-video');
+  const canvas = document.getElementById('scan-canvas');
+  const ctx    = canvas.getContext('2d');
+
+  function loop() {
+    if (!scanStream) return;
+    if (video.readyState === video.HAVE_ENOUGH_DATA) {
+      canvas.width  = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const code = window.jsQR && jsQR(imageData.data, imageData.width, imageData.height, {
+        inversionAttempts: 'dontInvert',
+      });
+      if (code?.data) {
+        closeScanner();
+        handleScannedURL(code.data);
+        return;
+      }
+    }
+    scanRaf = requestAnimationFrame(loop);
+  }
+  scanRaf = requestAnimationFrame(loop);
+}
+
+function closeScanner() {
+  document.getElementById('scan-overlay').classList.remove('open');
+  cancelAnimationFrame(scanRaf);
+  scanRaf = null;
+  if (scanStream) {
+    scanStream.getTracks().forEach(t => t.stop());
+    scanStream = null;
+  }
+  document.getElementById('scan-video').srcObject = null;
+  document.getElementById('scan-hint').textContent = 'Pointez la caméra vers le QR code';
+}
+
+function handleScannedURL(raw) {
+  let url;
+  try { url = new URL(raw); } catch { return; }
+  const e = url.searchParams.get('e');
+  const g = url.searchParams.get('g');
+  if (!e || !g) return;
+  window.location.href = `/?e=${encodeURIComponent(e)}&g=${encodeURIComponent(g)}`;
+}
+
+initScanBtn();
 
 // Boot: fetch initial state then open WebSocket
 if (EVENT_ID && GROUP_ID) {
