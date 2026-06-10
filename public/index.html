@@ -142,6 +142,13 @@
       color: var(--muted);
       margin-top: 4px;
     }
+    #group-sub {
+      display: none;
+      font-size: 13px;
+      color: var(--muted);
+      margin-top: 3px;
+      font-variant-numeric: tabular-nums;
+    }
 
     /* Capacity progress bar */
     #bar-wrap {
@@ -295,6 +302,7 @@
 <div id="count-area">
   <div id="count">–</div>
   <div id="count-label">personnes</div>
+  <div id="group-sub"></div>
   <div id="bar-wrap"><div id="bar" style="width:0%"></div></div>
 </div>
 
@@ -323,9 +331,15 @@
 
 <script>
 'use strict';
-let count = 0;
+let count = 0;       // total événement
+let groupCount = 0;  // compteur de ce groupe
+let groupName = '';  // nom de ce groupe
 let capacity = 100;
 let alertActive = false;
+
+// Paramètres d'URL — obligatoires
+const EVENT_ID = new URLSearchParams(location.search).get('e') || '';
+const GROUP_ID = new URLSearchParams(location.search).get('g') || '';
 
 // Identité de l'opérateur — demandée une fois, stockée en localStorage
 let opName = '';
@@ -368,9 +382,13 @@ function saveName() {
   if (currentWs?.readyState === 1) currentWs.send(JSON.stringify({ type: 'hello', name: opName }));
 }
 
-// Offline queue: persisted in localStorage so ops survive page reloads
+// Offline queue — vider si format ancien (sans champ 'e')
 let queue = [];
-try { queue = JSON.parse(localStorage.getItem('op_queue') || '[]'); } catch {}
+try {
+  const raw = JSON.parse(localStorage.getItem('op_queue') || '[]');
+  queue = (raw.length > 0 && !raw[0].e) ? [] : raw;
+  if (raw.length > 0 && !raw[0].e) localStorage.removeItem('op_queue');
+} catch {}
 renderQueueBadge();
 
 // ── UI helpers ──────────────────────────────────────────────────────
@@ -382,7 +400,7 @@ function setCount(n, cap) {
   const el = document.getElementById('count');
   el.textContent = count;
   el.classList.remove('bump');
-  void el.offsetWidth; // force reflow for animation restart
+  void el.offsetWidth;
   el.classList.add('bump');
 
   const pct = capacity > 0 ? count / capacity : 0;
@@ -391,10 +409,18 @@ function setCount(n, cap) {
 
   const body = document.body;
   body.classList.remove('state-warn', 'state-danger');
-  if (pct >= 1)   body.classList.add('state-danger');
+  if (pct >= 1)        body.classList.add('state-danger');
   else if (pct >= 0.8) body.classList.add('state-warn');
 
   triggerAlert(pct >= 1);
+}
+
+function setGroupCount(c, name) {
+  groupCount = c;
+  groupName = name;
+  const el = document.getElementById('group-sub');
+  el.textContent = `dont ${c} en ${name}`;
+  el.style.display = 'block';
 }
 
 function triggerAlert(active) {
@@ -426,10 +452,11 @@ function renderQueueBadge() {
 
 function tap(delta) {
   const uuid = crypto.randomUUID();
-  setCount(count + delta); // optimistic
-  // Toujours passer par la queue — garantit qu'aucun tap n'est perdu
-  // même en cas d'appuis rapides ou de réseau instable.
-  const op = { delta, uuid };
+  // Mise à jour optimiste : total ET compteur du groupe
+  setCount(count + delta);
+  setGroupCount(Math.max(0, groupCount + delta), groupName);
+
+  const op = { delta, uuid, e: EVENT_ID, g: GROUP_ID };
   if (opName) op.name = opName;
   queue.push(op);
   localStorage.setItem('op_queue', JSON.stringify(queue));
@@ -445,8 +472,6 @@ function fetchWithTimeout(url, opts, ms = 5000) {
 }
 
 // Verrou : une seule instance de flush peut tourner à la fois.
-// Sans ça, deux appels concurrents lisent le même queue[0] et
-// le double shift() supprime silencieusement l'opération suivante.
 let flushing = false;
 
 async function flush() {
@@ -465,11 +490,11 @@ async function flush() {
         queue.shift();
         localStorage.setItem('op_queue', JSON.stringify(queue));
         renderQueueBadge();
-        if (!data.dup) setCount(data.count);
+        if (!data.dup) setCount(data.total);
         triggerAlert(data.alert);
       } catch {
         setOnline(false);
-        break; // réseau indisponible — retry au prochain événement
+        break;
       }
     }
   } finally {
@@ -478,7 +503,6 @@ async function flush() {
   }
 }
 
-// Flush on reconnect events
 window.addEventListener('online', flush);
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && queue.length > 0) flush();
@@ -490,8 +514,14 @@ setInterval(() => { if (navigator.onLine && queue.length > 0) flush(); }, 2000);
 let currentWs = null;
 
 function connect() {
+  if (!EVENT_ID || !GROUP_ID) {
+    document.getElementById('status-text').textContent = 'URL invalide — utilisez le QR code';
+    document.getElementById('dot').className = 'offline';
+    return;
+  }
+
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const ws = new WebSocket(`${proto}//${location.host}`);
+  const ws = new WebSocket(`${proto}//${location.host}?e=${encodeURIComponent(EVENT_ID)}&g=${encodeURIComponent(GROUP_ID)}`);
   currentWs = ws;
 
   ws.onopen = () => {
@@ -503,26 +533,32 @@ function connect() {
   ws.onmessage = ({ data }) => {
     const msg = JSON.parse(data);
     if (msg.type === 'init' || msg.type === 'update') {
-      setCount(msg.count, msg.capacity);
-      if (msg.alert) triggerAlert(true);
+      setCount(msg.total, msg.capacity);
+      // Mettre à jour le compteur du groupe de cet opérateur
+      if (msg.groups && GROUP_ID) {
+        const myGroup = msg.groups.find(g => g.id === GROUP_ID);
+        if (myGroup) setGroupCount(myGroup.count, myGroup.name);
+      }
     }
-    if (msg.type === 'config') {
-      setCount(msg.count ?? count, msg.capacity);
+    if (msg.type === 'init' && msg.eventName) {
+      document.title = `${msg.eventName} – Compteur`;
     }
     // msg.type === 'clients' ignoré côté compteur
   };
 
-  ws.onclose = () => {
+  ws.onclose = (e) => {
     currentWs = null;
     setOnline(false);
+    if (e.code === 4004) {
+      document.getElementById('status-text').textContent = 'Événement ou groupe introuvable';
+      return;
+    }
     setTimeout(connect, 2000);
   };
   ws.onerror = () => ws.close();
 }
 
-// ── Tap binding — pointerdown plutôt que click : capture chaque toucher
-// immédiatement, sans le délai ou la fusion que le navigateur applique
-// aux clicks rapides sur mobile.
+// ── Tap binding — pointerdown : capture chaque toucher immédiatement
 function bindTapBtn(el, delta) {
   el.addEventListener('pointerdown', e => {
     e.preventDefault();
@@ -540,11 +576,18 @@ bindTapBtn(document.getElementById('btn-p5'),  5);
 bindTapBtn(document.getElementById('btn-m5'), -5);
 
 // Boot: fetch initial state then open WebSocket
-fetchWithTimeout('/api/state')
-  .then(r => r.json())
-  .then(d => setCount(d.count, d.capacity))
-  .catch(() => {})
-  .finally(connect);
+if (EVENT_ID && GROUP_ID) {
+  fetchWithTimeout(`/api/state?e=${encodeURIComponent(EVENT_ID)}&g=${encodeURIComponent(GROUP_ID)}`)
+    .then(r => r.json())
+    .then(d => {
+      setCount(d.total, d.capacity);
+      setGroupCount(d.groupCount, d.groupName);
+    })
+    .catch(() => {})
+    .finally(connect);
+} else {
+  connect(); // connect() affichera l'erreur URL invalide
+}
 </script>
 </body>
 </html>

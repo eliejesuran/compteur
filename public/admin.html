@@ -9,82 +9,44 @@
   <title>Admin – Compteur</title>
   <style>
     :root {
-      --bg: #0f172a;
-      --surface: #1e293b;
-      --border: #334155;
-      --text: #f8fafc;
-      --muted: #94a3b8;
-      --accent: #3b82f6;
-      --ok: #22c55e;
-      --warn: #f59e0b;
-      --danger: #ef4444;
+      --bg: #0f172a; --surface: #1e293b; --border: #334155;
+      --text: #f8fafc; --muted: #94a3b8; --accent: #3b82f6;
+      --ok: #22c55e; --warn: #f59e0b; --danger: #ef4444;
     }
     @media (prefers-color-scheme: light) {
       :root {
-        --bg: #f8fafc;
-        --surface: #ffffff;
-        --border: #e2e8f0;
-        --text: #0f172a;
-        --muted: #64748b;
-        --accent: #2563eb;
-        --ok: #16a34a;
-        --warn: #d97706;
-        --danger: #dc2626;
+        --bg: #f8fafc; --surface: #ffffff; --border: #e2e8f0;
+        --text: #0f172a; --muted: #64748b; --accent: #2563eb;
+        --ok: #16a34a; --warn: #d97706; --danger: #dc2626;
       }
       button.secondary { background: #e2e8f0; color: #0f172a; }
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      background: var(--bg);
-      color: var(--text);
+      background: var(--bg); color: var(--text);
       font-family: system-ui, -apple-system, sans-serif;
-      min-height: 100dvh;
-      padding: 16px;
-      max-width: 520px;
-      margin: 0 auto;
+      min-height: 100dvh; padding: 16px;
+      max-width: 520px; margin: 0 auto;
     }
     h1 { font-size: 22px; font-weight: 800; margin-bottom: 20px; }
     h2 {
-      font-size: 11px;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: 0.07em;
-      font-weight: 600;
-      margin-bottom: 10px;
+      font-size: 11px; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.07em;
+      font-weight: 600; margin-bottom: 10px;
     }
-    .card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 16px;
-      margin-bottom: 12px;
-    }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px; margin-bottom: 12px; }
     label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
-    input[type="password"],
-    input[type="number"],
-    input[type="text"] {
-      width: 100%;
-      padding: 11px 14px;
-      border-radius: 10px;
-      border: 1px solid var(--border);
-      background: var(--bg);
-      color: var(--text);
-      font-size: 16px;
-      margin-bottom: 8px;
-      outline: none;
+    input[type="password"], input[type="number"], input[type="text"], select {
+      width: 100%; padding: 11px 14px; border-radius: 10px;
+      border: 1px solid var(--border); background: var(--bg);
+      color: var(--text); font-size: 16px; margin-bottom: 8px;
+      outline: none; appearance: auto;
     }
-    input:focus { border-color: var(--accent); }
+    input:focus, select:focus { border-color: var(--accent); }
     button {
-      width: 100%;
-      padding: 12px;
-      border-radius: 10px;
-      border: none;
-      background: var(--accent);
-      color: #fff;
-      font-size: 15px;
-      font-weight: 700;
-      cursor: pointer;
-      transition: filter 0.1s;
+      width: 100%; padding: 12px; border-radius: 10px; border: none;
+      background: var(--accent); color: #fff; font-size: 15px;
+      font-weight: 700; cursor: pointer; transition: filter 0.1s;
     }
     button:hover { filter: brightness(1.1); }
     button:active { filter: brightness(0.85); }
@@ -92,56 +54,48 @@
     button.danger { background: var(--danger); }
     button + button { margin-top: 8px; }
     .toast {
-      display: none;
-      padding: 9px 14px;
-      border-radius: 8px;
-      font-size: 13px;
-      text-align: center;
-      margin-top: 8px;
+      display: none; padding: 9px 14px; border-radius: 8px;
+      font-size: 13px; text-align: center; margin-top: 8px;
     }
-    .toast.ok  { background: rgba(34,197,94,0.15); color: var(--ok); border: 1px solid rgba(34,197,94,0.3); }
-    .toast.err { background: rgba(239,68,68,0.15); color: var(--danger); border: 1px solid rgba(239,68,68,0.3); }
-    /* Big live count */
-    #live-count {
-      font-size: 64px;
-      font-weight: 900;
-      text-align: center;
-      color: var(--accent);
-      line-height: 1;
-      margin: 4px 0 6px;
-      font-variant-numeric: tabular-nums;
-    }
-    #live-sub { text-align: center; font-size: 13px; color: var(--muted); }
+    .toast.ok  { background: rgba(34,197,94,0.15);  color: var(--ok);     border: 1px solid rgba(34,197,94,0.3); }
+    .toast.err { background: rgba(239,68,68,0.15);  color: var(--danger); border: 1px solid rgba(239,68,68,0.3); }
+    /* Event row */
+    .event-row { display: flex; gap: 8px; align-items: center; }
+    .event-row select { flex: 1; margin-bottom: 0; }
+    .event-row button { width: auto; padding: 11px 18px; flex-shrink: 0; margin: 0; font-size: 18px; line-height: 1; }
+    /* Live count */
+    #live-count { font-size: 64px; font-weight: 900; text-align: center; color: var(--accent); line-height: 1; margin: 4px 0 2px; font-variant-numeric: tabular-nums; }
+    #live-sub   { text-align: center; font-size: 13px; color: var(--muted); margin-bottom: 12px; }
+    /* Group table */
+    .grp-table { width: 100%; border-collapse: collapse; font-size: 14px; margin: 10px 0 8px; }
+    .grp-table td { padding: 7px 4px; }
+    .grp-table tr + tr td { border-top: 1px solid var(--border); }
+    .grp-table .g-name { font-weight: 600; }
+    .grp-table .g-count { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; min-width: 48px; }
+    .grp-table .g-pct  { text-align: right; font-size: 12px; color: var(--muted); min-width: 40px; }
+    .grp-table .g-acts { text-align: right; white-space: nowrap; }
+    .grp-table .g-acts button { width: auto; padding: 3px 8px; font-size: 12px; margin: 0 0 0 4px; border-radius: 6px; }
+    .grp-table tfoot td { border-top: 2px solid var(--border); font-weight: 800; padding-top: 9px; }
+    .grp-table tfoot .g-count { color: var(--accent); }
     /* QR */
     #qr-img { display: block; width: 220px; margin: 12px auto; border-radius: 12px; }
-    #qr-url {
-      text-align: center;
-      font-size: 12px;
-      color: var(--muted);
-      word-break: break-all;
-      margin-top: 6px;
-    }
+    #qr-url { text-align: center; font-size: 12px; color: var(--muted); word-break: break-all; margin-top: 6px; }
     #ip-list { font-size: 12px; color: var(--muted); margin-top: 10px; line-height: 1.8; }
     #ip-list a { color: var(--accent); text-decoration: none; }
-    #login-view { }
-    #main-view  { display: none; }
-    /* Opérateurs connectés */
+    /* Operators */
     #op-empty { font-size: 13px; color: var(--muted); font-style: italic; }
     .op-badge {
-      display: inline-flex;
-      align-items: center;
+      display: inline-flex; align-items: center;
       padding: 4px 12px;
-      background: rgba(59,130,246,0.1);
-      border: 1px solid rgba(59,130,246,0.3);
-      border-radius: 999px;
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--accent);
-      margin: 3px 4px 3px 0;
+      background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.3);
+      border-radius: 999px; font-size: 13px; font-weight: 600;
+      color: var(--accent); margin: 3px 4px 3px 0;
     }
-    @media (prefers-color-scheme: light) {
-      button.secondary { background: #e2e8f0; color: #0f172a; }
-    }
+    /* Views */
+    #login-view {}
+    #main-view { display: none; }
+    #empty-state { display: none; }
+    #event-content { display: none; }
   </style>
 </head>
 <body>
@@ -161,59 +115,111 @@
 <div id="main-view">
   <h1>Administration</h1>
 
-  <!-- Live count -->
+  <!-- Event selector -->
   <div class="card">
-    <h2>Compteur en direct</h2>
-    <div id="live-count">–</div>
-    <div id="live-sub">– / –</div>
-    <a href="/stats.html" target="_blank" style="text-decoration:none; margin-top:10px; display:block;">
-      <button class="secondary">Voir les graphiques →</button>
-    </a>
+    <h2>Événement</h2>
+    <div class="event-row">
+      <select id="event-sel" onchange="switchEvent(this.value)"></select>
+      <button onclick="newEvent()" title="Nouvel événement">+</button>
+    </div>
   </div>
 
-  <!-- Opérateurs connectés -->
-  <div class="card">
-    <h2>Opérateurs connectés (<span id="op-count">0</span>)</h2>
-    <div id="op-list"><span id="op-empty">Aucun opérateur connecté pour l'instant.</span></div>
+  <!-- Empty state -->
+  <div class="card" id="empty-state">
+    <h2>Aucun événement</h2>
+    <label>Créez votre premier événement pour commencer.</label>
+    <button onclick="newEvent()">Créer un événement</button>
   </div>
 
-  <!-- QR code -->
-  <div class="card">
-    <h2>QR code compteur</h2>
-    <img id="qr-img" src="" alt="QR Code">
-    <div id="qr-url"></div>
-    <div id="ip-list"></div>
-  </div>
+  <!-- Event content (hidden until event selected) -->
+  <div id="event-content">
 
-  <!-- Capacity -->
-  <div class="card">
-    <h2>Seuil d'alerte (capacité max)</h2>
-    <label>À partir de ce nombre, tous les appareils vibrent et passent en rouge.</label>
-    <input type="number" id="cap-input" placeholder="ex : 200" min="1">
-    <button onclick="saveConfig()">Enregistrer</button>
-    <div class="toast" id="cap-toast"></div>
-  </div>
+    <!-- Live count + group breakdown -->
+    <div class="card">
+      <h2>Compteur en direct</h2>
+      <div id="live-count">–</div>
+      <div id="live-sub">– / –</div>
+      <table class="grp-table">
+        <tbody id="grp-body"></tbody>
+        <tfoot>
+          <tr>
+            <td class="g-name">Total</td>
+            <td class="g-count" id="grp-total">–</td>
+            <td class="g-pct" id="grp-cap-sub"></td>
+            <td class="g-acts"></td>
+          </tr>
+        </tfoot>
+      </table>
+      <button class="secondary" onclick="createGroup()" style="margin-top:4px">+ Nouveau groupe</button>
+      <a id="stats-link" href="/stats.html" target="_blank" style="text-decoration:none; margin-top:8px; display:block;">
+        <button class="secondary">Voir les graphiques →</button>
+      </a>
+    </div>
 
-  <!-- Change code -->
-  <div class="card">
-    <h2>Changer le code admin</h2>
-    <input type="password" id="new-code" placeholder="Nouveau code (min. 4 caractères)">
-    <button onclick="changeCode()">Changer le code</button>
-    <div class="toast" id="code-toast"></div>
-  </div>
+    <!-- Connected operators -->
+    <div class="card">
+      <h2>Opérateurs connectés (<span id="op-count">0</span>)</h2>
+      <div id="op-list"><span id="op-empty">Aucun opérateur connecté pour l'instant.</span></div>
+    </div>
 
-  <!-- Reset -->
-  <div class="card">
-    <h2>Réinitialiser l'événement</h2>
-    <label>Remet le compteur à 0 et efface tout l'historique.</label>
-    <button class="danger" onclick="resetCounter()">Remettre à zéro</button>
-    <div class="toast" id="reset-toast"></div>
-  </div>
-</div>
+    <!-- QR code (per group) -->
+    <div class="card">
+      <h2>QR code — par groupe</h2>
+      <select id="qr-group-sel" onchange="loadQR(this.value)" style="margin-bottom:10px"></select>
+      <img id="qr-img" src="" alt="QR Code">
+      <div id="qr-url"></div>
+      <div id="ip-list"></div>
+    </div>
+
+    <!-- Capacity -->
+    <div class="card">
+      <h2>Seuil d'alerte (capacité max — total événement)</h2>
+      <label>À partir de ce nombre total, tous les appareils vibrent et passent en rouge.</label>
+      <input type="number" id="cap-input" placeholder="ex : 200" min="1">
+      <button onclick="saveCapacity()">Enregistrer</button>
+      <div class="toast" id="cap-toast"></div>
+    </div>
+
+    <!-- Rename event -->
+    <div class="card">
+      <h2>Renommer cet événement</h2>
+      <input type="text" id="event-name-input" placeholder="Nom de l'événement" maxlength="40">
+      <button onclick="renameEvent()">Renommer</button>
+      <div class="toast" id="name-toast"></div>
+    </div>
+
+    <!-- Change admin code -->
+    <div class="card">
+      <h2>Changer le code admin</h2>
+      <input type="password" id="new-code" placeholder="Nouveau code (min. 4 caractères)">
+      <button onclick="changeCode()">Changer le code</button>
+      <div class="toast" id="code-toast"></div>
+    </div>
+
+    <!-- Reset -->
+    <div class="card">
+      <h2>Réinitialiser cet événement</h2>
+      <label>Remet tous les groupes à 0 et efface l'historique.</label>
+      <button class="danger" onclick="resetEvent()">Remettre à zéro</button>
+      <div class="toast" id="reset-toast"></div>
+    </div>
+
+    <!-- Archive -->
+    <div class="card">
+      <h2>Archiver cet événement</h2>
+      <label>L'événement sera masqué. Les données sont conservées.</label>
+      <button class="danger" onclick="archiveEvent()">Archiver</button>
+    </div>
+
+  </div><!-- /event-content -->
+</div><!-- /main-view -->
 
 <script>
 'use strict';
 let adminCode = '';
+let currentEvent = '';
+let events = [];      // [{id, name, total, capacity, groups:[{id,name,count}]}]
+let ws = null;
 
 // ── Helpers ──
 
@@ -222,14 +228,18 @@ function toast(id, msg, type, ms = 3000) {
   el.textContent = msg;
   el.className = `toast ${type}`;
   el.style.display = 'block';
-  clearTimeout(el._timer);
-  el._timer = setTimeout(() => { el.style.display = 'none'; }, ms);
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.style.display = 'none'; }, ms);
 }
 
-function fetchWithTimeout(url, opts, ms = 6000) {
+function fetchT(url, opts, ms = 6000) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), ms);
   return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(t));
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
 // ── Login ──
@@ -237,9 +247,8 @@ function fetchWithTimeout(url, opts, ms = 6000) {
 async function login() {
   const code = document.getElementById('code-input').value.trim();
   if (!code) return;
-  const res = await fetchWithTimeout(`/api/history?code=${encodeURIComponent(code)}`);
+  const res = await fetchT(`/api/events?code=${encodeURIComponent(code)}`);
   if (!res.ok) { toast('login-err', 'Code incorrect', 'err'); return; }
-
   adminCode = code;
   document.getElementById('login-view').style.display = 'none';
   document.getElementById('main-view').style.display = 'block';
@@ -252,131 +261,303 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 
-// ── Load ──
+// ── Events ──
 
 async function loadAll() {
-  // State
-  const st = await fetchWithTimeout('/api/state').then(r => r.json());
-  updateLiveCount(st.count, st.capacity);
-  document.getElementById('cap-input').value = st.capacity;
+  await loadEvents();
+  if (events.length === 0) {
+    document.getElementById('empty-state').style.display = 'block';
+    document.getElementById('event-content').style.display = 'none';
+    loadIPs();
+    return;
+  }
+  document.getElementById('empty-state').style.display = 'none';
+  document.getElementById('event-content').style.display = 'block';
+  currentEvent = events[0].id;
+  renderEventSelector();
+  await loadEventUI(currentEvent);
+  startWS(currentEvent);
+}
 
-  // QR code
+async function loadEvents() {
+  const data = await fetchT(`/api/events?code=${adminCode}`).then(r => r.json()).catch(() => ({ events: [] }));
+  events = data.events || [];
+}
+
+function renderEventSelector() {
+  const sel = document.getElementById('event-sel');
+  sel.innerHTML = events.map(e => `<option value="${esc(e.id)}">${esc(e.name)}</option>`).join('');
+  sel.value = currentEvent;
+}
+
+async function switchEvent(id) {
+  currentEvent = id;
+  document.getElementById('event-content').style.display = 'block';
+  document.getElementById('empty-state').style.display = 'none';
+  document.getElementById('stats-link').href = `/stats.html?e=${encodeURIComponent(id)}`;
+  await loadEventUI(id);
+  startWS(id);
+}
+
+async function loadEventUI(id) {
+  const evt = events.find(e => e.id === id);
+  if (!evt) return;
+
+  document.getElementById('stats-link').href = `/stats.html?e=${encodeURIComponent(id)}`;
+  document.getElementById('event-name-input').value = evt.name;
+  document.getElementById('cap-input').value = evt.capacity;
+  renderGroupTable(evt.groups, evt.total, evt.capacity);
+  renderQRSelector(evt.groups);
+  if (evt.groups.length > 0) loadQR(evt.groups[0].id);
+
   try {
-    const qd = await fetchWithTimeout(`/api/qr?code=${adminCode}`).then(r => r.json());
+    const cd = await fetchT(`/api/clients?code=${adminCode}&e=${id}`).then(r => r.json());
+    updateOperatorList(cd.clients);
+  } catch {}
+}
+
+// ── Group table ──
+
+function renderGroupTable(groups, total, cap) {
+  document.getElementById('live-count').textContent = total;
+  document.getElementById('live-sub').textContent = `${total} / ${cap} personnes`;
+  document.getElementById('grp-total').textContent = total;
+  document.getElementById('grp-cap-sub').textContent = `/ ${cap}`;
+
+  const tbody = document.getElementById('grp-body');
+  tbody.innerHTML = groups.map(g => {
+    const pct = total > 0 ? Math.round(g.count / total * 100) : 0;
+    const canDel = groups.length > 1;
+    return `<tr>
+      <td class="g-name">${esc(g.name)}</td>
+      <td class="g-count">${g.count}</td>
+      <td class="g-pct">${pct}%</td>
+      <td class="g-acts">
+        <button class="secondary" onclick="renameGroup('${esc(g.id)}','${esc(g.name)}')">✎</button>
+        ${canDel ? `<button class="danger" onclick="deleteGroup('${esc(g.id)}')">×</button>` : ''}
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function renderQRSelector(groups) {
+  const sel = document.getElementById('qr-group-sel');
+  const prev = sel.value;
+  sel.innerHTML = groups.map(g => `<option value="${esc(g.id)}">${esc(g.name)}</option>`).join('');
+  if (groups.find(g => g.id === prev)) sel.value = prev;
+}
+
+async function loadQR(groupId) {
+  if (!groupId || !currentEvent) return;
+  try {
+    const qd = await fetchT(`/api/qr?code=${adminCode}&e=${currentEvent}&g=${groupId}`).then(r => r.json());
     document.getElementById('qr-img').src = qd.qr;
     document.getElementById('qr-url').textContent = qd.url;
   } catch {}
+}
 
-  // Local IPs (only meaningful on local deployments)
+async function loadIPs() {
+  if (document.getElementById('ip-list').dataset.loaded) return;
   try {
-    const ipd = await fetchWithTimeout(`/api/ips?code=${adminCode}`).then(r => r.json());
+    const ipd = await fetchT(`/api/ips?code=${adminCode}`).then(r => r.json());
     if (ipd.ips.length) {
-      const links = ipd.ips.map(ip =>
-        `<a href="http://${ip}:${ipd.port}" target="_blank">http://${ip}:${ipd.port}</a>`
-      ).join('<br>');
-      document.getElementById('ip-list').innerHTML = `Adresses réseau :<br>${links}`;
+      document.getElementById('ip-list').innerHTML = `Adresses réseau :<br>` +
+        ipd.ips.map(ip => `<a href="http://${ip}:${ipd.port}" target="_blank">http://${ip}:${ipd.port}</a>`).join('<br>');
+      document.getElementById('ip-list').dataset.loaded = 'true';
     }
   } catch {}
-
-  // Opérateurs actuellement connectés
-  try {
-    const cd = await fetchWithTimeout(`/api/clients?code=${adminCode}`).then(r => r.json());
-    updateOperatorList(cd.clients.map(c => c.name));
-  } catch {}
-
-  startWS();
 }
 
-function updateLiveCount(c, cap) {
-  document.getElementById('live-count').textContent = c;
-  if (cap) document.getElementById('live-sub').textContent = `${c} / ${cap} personnes`;
-}
+// ── Operators ──
 
-function escapeHtml(s) {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-function updateOperatorList(names) {
-  document.getElementById('op-count').textContent = names.length;
+function updateOperatorList(clients) {
+  document.getElementById('op-count').textContent = clients.length;
   const list = document.getElementById('op-list');
-  if (names.length === 0) {
+  if (clients.length === 0) {
     list.innerHTML = '<span id="op-empty">Aucun opérateur connecté pour l\'instant.</span>';
     return;
   }
-  list.innerHTML = names.map(n => `<span class="op-badge">${escapeHtml(n)}</span>`).join('');
+  list.innerHTML = clients.map(c => {
+    const grpPart = c.groupName ? ` <span style="font-weight:400;opacity:0.65">(${esc(c.groupName)})</span>` : '';
+    return `<span class="op-badge">${esc(c.name)}${grpPart}</span>`;
+  }).join('');
 }
 
 // ── WebSocket ──
 
-function startWS() {
+function startWS(eventId) {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const ws = new WebSocket(`${proto}//${location.host}`);
+  const myWs = new WebSocket(`${proto}//${location.host}?e=${encodeURIComponent(eventId)}`);
+  ws = myWs;
 
-  ws.onopen = () => {
-    // Resynchroniser la liste au (re)connect — filet de sécurité si un broadcast a été manqué
-    fetchWithTimeout(`/api/clients?code=${adminCode}`)
+  myWs.onopen = () => {
+    loadIPs();
+    fetchT(`/api/clients?code=${adminCode}&e=${eventId}`)
       .then(r => r.json())
-      .then(d => updateOperatorList(d.clients.map(c => c.name)))
+      .then(d => { if (currentEvent === eventId) updateOperatorList(d.clients); })
       .catch(() => {});
   };
 
-  ws.onmessage = ({ data }) => {
+  myWs.onmessage = ({ data }) => {
+    if (currentEvent !== eventId) return;
     const msg = JSON.parse(data);
-    if (msg.type === 'init' || msg.type === 'update') updateLiveCount(msg.count, msg.capacity);
-    if (msg.type === 'clients') updateOperatorList(msg.names);
-    if (msg.type === 'config') {
-      document.getElementById('cap-input').value = msg.capacity;
-      const cur = msg.count ?? (parseInt(document.getElementById('live-count').textContent) || 0);
-      updateLiveCount(cur, msg.capacity);
+    if (msg.type === 'init' || msg.type === 'update') {
+      const evt = events.find(e => e.id === eventId);
+      if (evt) {
+        evt.total = msg.total;
+        evt.groups = msg.groups.map(g => ({ ...g, ...(evt.groups.find(eg => eg.id === g.id) || {}) }));
+        // sync counts from WS
+        msg.groups.forEach(g => {
+          const eg = evt.groups.find(x => x.id === g.id);
+          if (eg) eg.count = g.count;
+        });
+      }
+      renderGroupTable(msg.groups, msg.total, msg.capacity);
+      renderQRSelector(msg.groups);
     }
+    if (msg.type === 'clients') updateOperatorList(msg.clients);
   };
-  ws.onclose = () => setTimeout(startWS, 2000);
-  ws.onerror  = () => ws.close();
+
+  myWs.onclose = () => {
+    if (currentEvent !== eventId) return;
+    setTimeout(() => { if (currentEvent === eventId) startWS(eventId); }, 2000);
+  };
+  myWs.onerror = () => myWs.close();
 }
 
 // ── Actions ──
 
-async function saveConfig() {
-  const capacity = parseInt(document.getElementById('cap-input').value, 10);
-  if (!capacity || capacity < 1) { toast('cap-toast', 'Valeur invalide', 'err'); return; }
-  const res = await fetchWithTimeout('/api/admin/config', {
+async function newEvent() {
+  const name = prompt('Nom de l\'événement :');
+  if (!name?.trim()) return;
+  const data = await fetchT('/api/events', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code: adminCode, capacity }),
+    body: JSON.stringify({ code: adminCode, name: name.trim() }),
   }).then(r => r.json());
-  if (res.ok) toast('cap-toast', `Seuil réglé à ${res.capacity} personnes`, 'ok');
+  if (data.id) {
+    events.push(data);
+    document.getElementById('empty-state').style.display = 'none';
+    document.getElementById('event-content').style.display = 'block';
+    renderEventSelector();
+    currentEvent = data.id;
+    document.getElementById('event-sel').value = data.id;
+    await loadEventUI(data.id);
+    startWS(data.id);
+  }
+}
+
+async function createGroup() {
+  const name = prompt('Nom du groupe :');
+  if (!name?.trim()) return;
+  const data = await fetchT('/api/groups', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: adminCode, e: currentEvent, name: name.trim() }),
+  }).then(r => r.json());
+  if (data.id) {
+    // WS update will refresh the table; also refresh QR selector
+    await loadEvents();
+    const evt = events.find(e => e.id === currentEvent);
+    if (evt) { renderQRSelector(evt.groups); loadQR(data.id); }
+  }
+}
+
+async function renameGroup(groupId, currentName) {
+  const name = prompt('Nouveau nom :', currentName);
+  if (!name?.trim() || name.trim() === currentName) return;
+  await fetchT('/api/admin/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: adminCode, e: currentEvent, g: groupId, name: name.trim() }),
+  });
+  // WS will broadcast update with new group name
+}
+
+async function deleteGroup(groupId) {
+  if (!confirm('Supprimer ce groupe ? Les données sont perdues.')) return;
+  const res = await fetchT('/api/admin/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: adminCode, e: currentEvent, g: groupId, deleteGroup: true }),
+  }).then(r => r.json());
+  if (res.ok === false) alert('Impossible de supprimer le dernier groupe.');
+  // WS broadcast will refresh table
+}
+
+async function saveCapacity() {
+  const capacity = parseInt(document.getElementById('cap-input').value, 10);
+  if (!capacity || capacity < 1) { toast('cap-toast', 'Valeur invalide', 'err'); return; }
+  const res = await fetchT('/api/admin/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: adminCode, e: currentEvent, capacity }),
+  }).then(r => r.json());
+  if (res.ok) toast('cap-toast', `Seuil réglé à ${capacity} personnes`, 'ok');
   else toast('cap-toast', 'Erreur', 'err');
+}
+
+async function renameEvent() {
+  const name = document.getElementById('event-name-input').value.trim();
+  if (!name) { toast('name-toast', 'Nom vide', 'err'); return; }
+  const res = await fetchT('/api/admin/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: adminCode, e: currentEvent, name }),
+  }).then(r => r.json());
+  if (res.ok) {
+    toast('name-toast', 'Renommé', 'ok');
+    const evt = events.find(e => e.id === currentEvent);
+    if (evt) evt.name = name;
+    renderEventSelector();
+  } else toast('name-toast', 'Erreur', 'err');
 }
 
 async function changeCode() {
   const newCode = document.getElementById('new-code').value.trim();
   if (newCode.length < 4) { toast('code-toast', 'Code trop court (min. 4 caractères)', 'err'); return; }
-  const res = await fetchWithTimeout('/api/admin/config', {
+  const res = await fetchT('/api/admin/config', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code: adminCode, newCode }),
+    body: JSON.stringify({ code: adminCode, e: currentEvent, newCode }),
   }).then(r => r.json());
   if (res.ok) {
     adminCode = newCode;
     document.getElementById('new-code').value = '';
     toast('code-toast', 'Code modifié', 'ok');
-  } else {
-    toast('code-toast', 'Erreur', 'err');
-  }
+  } else toast('code-toast', 'Erreur', 'err');
 }
 
-async function resetCounter() {
-  if (!confirm('Remettre le compteur à 0 et effacer l\'historique ?')) return;
-  const res = await fetchWithTimeout('/api/admin/config', {
+async function resetEvent() {
+  if (!confirm('Remettre tous les groupes à 0 et effacer l\'historique ?')) return;
+  const res = await fetchT('/api/admin/config', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code: adminCode, reset: true }),
+    body: JSON.stringify({ code: adminCode, e: currentEvent, reset: true }),
   }).then(r => r.json());
-  if (res.ok) {
-    updateLiveCount(0, null);
-    toast('reset-toast', 'Compteur remis à zéro', 'ok');
+  if (res.ok) toast('reset-toast', 'Réinitialisé', 'ok');
+  else toast('reset-toast', 'Erreur', 'err');
+}
+
+async function archiveEvent() {
+  if (!confirm('Archiver cet événement ? Il sera masqué dans l\'admin.')) return;
+  await fetchT('/api/admin/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: adminCode, e: currentEvent, archived: true }),
+  });
+  events = events.filter(e => e.id !== currentEvent);
+  if (events.length > 0) {
+    renderEventSelector();
+    currentEvent = events[0].id;
+    document.getElementById('event-sel').value = currentEvent;
+    await loadEventUI(currentEvent);
+    startWS(currentEvent);
   } else {
-    toast('reset-toast', 'Erreur', 'err');
+    currentEvent = '';
+    document.getElementById('event-content').style.display = 'none';
+    document.getElementById('empty-state').style.display = 'block';
+    document.getElementById('event-sel').innerHTML = '';
   }
 }
 </script>
