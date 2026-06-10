@@ -169,8 +169,14 @@ wss.on('connection', (ws) => {
       if (msg.type === 'hello' && typeof msg.name === 'string') {
         const name = msg.name.trim().slice(0, 32);
         if (!name) return;
-        wsClients.get(ws).name = name;
-        logClients('connecté(e)', name);
+        const client = wsClients.get(ws);
+        const prevName = client.name;
+        client.name = name;
+        if (prevName && prevName !== name) {
+          logClients(`renommé(e) → ${name}`, prevName);
+        } else if (!prevName) {
+          logClients('connecté(e)', name);
+        }
         broadcastClients();
       }
     } catch {}
