@@ -25,6 +25,7 @@ let state = {
   history: [], // [{t: timestamp_ms, c: count}]
 };
 const seenOps = new Set(); // UUID dedup — prevents double-count on retries
+const wsClients = new Map(); // ws → {name: null|string, connectedAt: number}
 
 // --- Helpers ---
 function broadcast(data) {
@@ -32,6 +33,20 @@ function broadcast(data) {
   for (const client of wss.clients) {
     if (client.readyState === 1) client.send(msg);
   }
+}
+
+function broadcastClients() {
+  // Déduplique par nom au cas où un opérateur aurait plusieurs onglets ouverts
+  const names = [...new Set(
+    [...wsClients.values()].filter(c => c.name).map(c => c.name)
+  )];
+  broadcast({ type: 'clients', names });
+}
+
+function logClients(action, name) {
+  const active = [...wsClients.values()].filter(c => c.name).length;
+  const t = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  console.log(`[${t}] ${name} ${action} — ${active} opérateur(s) connecté(s)`);
 }
 
 function getLocalIPs() {
@@ -120,6 +135,15 @@ app.get('/api/qr', async (req, res) => {
   res.json({ qr, url });
 });
 
+// Admin: connected operator list (live, WS-tracked)
+app.get('/api/clients', (req, res) => {
+  if (req.query.code !== state.adminCode) return res.status(403).json({ error: 'forbidden' });
+  const clients = [...wsClients.values()]
+    .filter(c => c.name)
+    .map(c => ({ name: c.name, connectedAt: c.connectedAt }));
+  res.json({ clients });
+});
+
 // Admin: list local IPs (useful for local deployments)
 app.get('/api/ips', (req, res) => {
   if (req.query.code !== state.adminCode) return res.status(403).json({ error: 'forbidden' });
@@ -128,9 +152,32 @@ app.get('/api/ips', (req, res) => {
 
 // --- WebSocket ---
 wss.on('connection', (ws) => {
-  // Send current state to any new client immediately
+  wsClients.set(ws, { name: null, connectedAt: Date.now() });
   ws.send(JSON.stringify({ type: 'init', count: state.count, capacity: state.capacity }));
-  ws.on('error', () => {}); // prevent unhandled error crash
+
+  ws.on('message', (raw) => {
+    try {
+      const msg = JSON.parse(raw);
+      if (msg.type === 'hello' && typeof msg.name === 'string') {
+        const name = msg.name.trim().slice(0, 32);
+        if (!name) return;
+        wsClients.get(ws).name = name;
+        logClients('connecté(e)', name);
+        broadcastClients();
+      }
+    } catch {}
+  });
+
+  ws.on('close', () => {
+    const client = wsClients.get(ws);
+    wsClients.delete(ws);
+    if (client?.name) {
+      logClients('déconnecté(e)', client.name);
+      broadcastClients();
+    }
+  });
+
+  ws.on('error', () => {});
 });
 
 // --- Start ---
@@ -173,4 +220,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, server, state, seenOps, trimSeenOps };
+module.exports = { app, server, state, seenOps, trimSeenOps, wsClients };

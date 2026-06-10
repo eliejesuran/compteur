@@ -6,7 +6,7 @@ const request = require('supertest');
 const WebSocket = require('ws');
 const { randomUUID } = require('node:crypto');
 
-const { server, state, seenOps, trimSeenOps } = require('../server');
+const { server, state, seenOps, trimSeenOps, wsClients } = require('../server');
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -18,6 +18,7 @@ function resetState() {
   state.adminCode = 'admin123';
   state.history  = [];
   seenOps.clear();
+  wsClients.clear();
 }
 
 before(() => new Promise(resolve => server.listen(0, resolve)));
@@ -443,6 +444,127 @@ describe('WebSocket', () => {
         .post('/api/admin/config')
         .send({ code: 'admin123', capacity: 500 })
         .end(() => {});
+    });
+    ws.on('error', done);
+  });
+
+  test('hello avec nom → broadcast type:clients avec le nom', (_t, done) => {
+    const ws = new WebSocket(wsUrl());
+    ws.once('message', () => {
+      // init reçu — on envoie hello, le serveur doit broadcaster clients
+      ws.once('message', (data) => {
+        const msg = JSON.parse(data);
+        assert.equal(msg.type, 'clients');
+        assert.ok(msg.names.includes('Testeur'));
+        ws.close();
+        done();
+      });
+      ws.send(JSON.stringify({ type: 'hello', name: 'Testeur' }));
+    });
+    ws.on('error', done);
+  });
+
+  test('hello avec nom vide → pas de broadcast clients', (_t, done) => {
+    const ws = new WebSocket(wsUrl());
+    ws.once('message', () => {
+      let gotClients = false;
+      ws.on('message', (data) => {
+        const msg = JSON.parse(data);
+        if (msg.type === 'clients') gotClients = true;
+      });
+      ws.send(JSON.stringify({ type: 'hello', name: '   ' }));
+      // attendre un court délai — aucun message clients ne doit arriver
+      setTimeout(() => {
+        assert.ok(!gotClients, 'pas de broadcast clients pour un nom vide');
+        ws.close();
+        done();
+      }, 80);
+    });
+    ws.on('error', done);
+  });
+
+  test('déconnexion après hello → broadcast clients mis à jour', (_t, done) => {
+    const observer = new WebSocket(wsUrl());
+    observer.once('message', () => {
+      // observer connecté — on ouvre un second client qui s'identifie
+      const actor = new WebSocket(wsUrl());
+      actor.once('message', () => {
+        actor.send(JSON.stringify({ type: 'hello', name: 'Partant' }));
+        // attendre le broadcast clients "connecté"
+        observer.once('message', (data) => {
+          const join = JSON.parse(data);
+          assert.equal(join.type, 'clients');
+          assert.ok(join.names.includes('Partant'));
+          // fermer actor → broadcast "déconnecté"
+          observer.once('message', (data2) => {
+            const leave = JSON.parse(data2);
+            assert.equal(leave.type, 'clients');
+            assert.ok(!leave.names.includes('Partant'));
+            observer.close();
+            done();
+          });
+          actor.close();
+        });
+      });
+      actor.on('error', done);
+    });
+    observer.on('error', done);
+  });
+});
+
+// ── GET /api/clients ──────────────────────────────────────────────────────────
+
+describe('GET /api/clients', () => {
+  function wsUrl() {
+    return `ws://localhost:${server.address().port}`;
+  }
+
+  test('mauvais code → 403', async () => {
+    const res = await request(server).get('/api/clients?code=wrong');
+    assert.equal(res.status, 403);
+  });
+
+  test('code absent → 403', async () => {
+    const res = await request(server).get('/api/clients');
+    assert.equal(res.status, 403);
+  });
+
+  test('bon code, aucun client nommé → liste vide', async () => {
+    const res = await request(server).get('/api/clients?code=admin123');
+    assert.equal(res.status, 200);
+    assert.ok(Array.isArray(res.body.clients));
+    assert.equal(res.body.clients.length, 0);
+  });
+
+  test('bon code, client connecté avec nom → apparaît dans la liste', (_t, done) => {
+    const ws = new WebSocket(wsUrl());
+    ws.once('message', () => {
+      ws.send(JSON.stringify({ type: 'hello', name: 'Alice' }));
+      // attendre que le serveur traite le hello
+      setTimeout(async () => {
+        const res = await request(server).get('/api/clients?code=admin123');
+        assert.equal(res.status, 200);
+        const names = res.body.clients.map(c => c.name);
+        assert.ok(names.includes('Alice'));
+        assert.ok(res.body.clients[0].connectedAt > 0);
+        ws.close();
+        done();
+      }, 50);
+    });
+    ws.on('error', done);
+  });
+
+  test('nom tronqué à 32 caractères', (_t, done) => {
+    const ws = new WebSocket(wsUrl());
+    ws.once('message', () => {
+      ws.send(JSON.stringify({ type: 'hello', name: 'A'.repeat(100) }));
+      setTimeout(async () => {
+        const res = await request(server).get('/api/clients?code=admin123');
+        const names = res.body.clients.map(c => c.name);
+        assert.ok(names.some(n => n.length === 32));
+        ws.close();
+        done();
+      }, 50);
     });
     ws.on('error', done);
   });

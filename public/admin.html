@@ -122,6 +122,23 @@
     #ip-list a { color: var(--accent); text-decoration: none; }
     #login-view { }
     #main-view  { display: none; }
+    /* Opérateurs connectés */
+    #op-empty { font-size: 13px; color: var(--muted); font-style: italic; }
+    .op-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 12px;
+      background: rgba(59,130,246,0.1);
+      border: 1px solid rgba(59,130,246,0.3);
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--accent);
+      margin: 3px 4px 3px 0;
+    }
+    @media (prefers-color-scheme: light) {
+      button.secondary { background: #e2e8f0; color: #0f172a; }
+    }
   </style>
 </head>
 <body>
@@ -149,6 +166,12 @@
     <a href="/stats.html" target="_blank" style="text-decoration:none; margin-top:10px; display:block;">
       <button class="secondary">Voir les graphiques →</button>
     </a>
+  </div>
+
+  <!-- Opérateurs connectés -->
+  <div class="card">
+    <h2>Opérateurs connectés (<span id="op-count">0</span>)</h2>
+    <div id="op-list"><span id="op-empty">Aucun opérateur connecté pour l'instant.</span></div>
   </div>
 
   <!-- QR code -->
@@ -252,12 +275,32 @@ async function loadAll() {
     }
   } catch {}
 
+  // Opérateurs actuellement connectés
+  try {
+    const cd = await fetchWithTimeout(`/api/clients?code=${adminCode}`).then(r => r.json());
+    updateOperatorList(cd.clients.map(c => c.name));
+  } catch {}
+
   startWS();
 }
 
 function updateLiveCount(c, cap) {
   document.getElementById('live-count').textContent = c;
   if (cap) document.getElementById('live-sub').textContent = `${c} / ${cap} personnes`;
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function updateOperatorList(names) {
+  document.getElementById('op-count').textContent = names.length;
+  const list = document.getElementById('op-list');
+  if (names.length === 0) {
+    list.innerHTML = '<span id="op-empty">Aucun opérateur connecté pour l\'instant.</span>';
+    return;
+  }
+  list.innerHTML = names.map(n => `<span class="op-badge">${escapeHtml(n)}</span>`).join('');
 }
 
 // ── WebSocket ──
@@ -268,6 +311,7 @@ function startWS() {
   ws.onmessage = ({ data }) => {
     const msg = JSON.parse(data);
     if (msg.type === 'init' || msg.type === 'update') updateLiveCount(msg.count, msg.capacity);
+    if (msg.type === 'clients') updateOperatorList(msg.names);
     if (msg.type === 'config') {
       document.getElementById('cap-input').value = msg.capacity;
       const cur = msg.count ?? (parseInt(document.getElementById('live-count').textContent) || 0);

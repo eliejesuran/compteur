@@ -214,6 +214,54 @@
       0%, 100% { background: rgba(239,68,68,0.08); }
       50%       { background: rgba(239,68,68,0.22); }
     }
+
+    /* ── Overlay saisie du prénom ── */
+    #name-overlay {
+      display: none;
+      position: fixed; inset: 0;
+      background: var(--bg);
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      z-index: 200;
+    }
+    #name-card {
+      background: var(--surface);
+      border-radius: 22px;
+      padding: 32px 24px 28px;
+      width: 100%;
+      max-width: 300px;
+      text-align: center;
+    }
+    #name-card h2 { font-size: 22px; font-weight: 800; margin-bottom: 8px; }
+    #name-card p  { color: var(--muted); font-size: 13px; line-height: 1.5; margin-bottom: 20px; }
+    #name-input {
+      width: 100%;
+      padding: 14px;
+      border-radius: 12px;
+      border: 1.5px solid var(--btn-border);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 20px;
+      font-weight: 700;
+      text-align: center;
+      outline: none;
+      margin-bottom: 14px;
+      -webkit-appearance: none;
+    }
+    #name-input:focus { border-color: var(--blue); }
+    #name-card .btn-start {
+      width: 100%;
+      height: 52px;
+      border: none;
+      border-radius: 14px;
+      background: var(--blue);
+      color: #fff;
+      font-size: 17px;
+      font-weight: 800;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
   </style>
 </head>
 <body>
@@ -243,11 +291,45 @@
 
 <div id="alert-overlay"></div>
 
+<!-- Overlay prénom — affiché uniquement à la première connexion -->
+<div id="name-overlay">
+  <div id="name-card">
+    <h2>Votre prénom</h2>
+    <p>Visible par l'administrateur<br>de l'événement</p>
+    <input id="name-input" type="text" placeholder="ex : Alice" maxlength="32"
+           autocomplete="given-name" enterkeyhint="go">
+    <button class="btn-start" onclick="saveName()">Commencer</button>
+  </div>
+</div>
+
 <script>
 'use strict';
 let count = 0;
 let capacity = 100;
 let alertActive = false;
+
+// Identité de l'opérateur — demandée une fois, stockée en localStorage
+let opName = '';
+try { opName = localStorage.getItem('op_name') || ''; } catch {}
+
+if (!opName) {
+  document.getElementById('name-overlay').style.display = 'flex';
+} else {
+  document.getElementById('name-overlay').style.display = 'none';
+}
+
+document.getElementById('name-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') saveName();
+});
+
+function saveName() {
+  const val = document.getElementById('name-input').value.trim().slice(0, 32);
+  if (!val) { document.getElementById('name-input').focus(); return; }
+  opName = val;
+  try { localStorage.setItem('op_name', opName); } catch {}
+  document.getElementById('name-overlay').style.display = 'none';
+  if (currentWs?.readyState === 1) currentWs.send(JSON.stringify({ type: 'hello', name: opName }));
+}
 
 // Offline queue: persisted in localStorage so ops survive page reloads
 let queue = [];
@@ -366,11 +448,18 @@ setInterval(() => { if (navigator.onLine && queue.length > 0) flush(); }, 2000);
 
 // ── WebSocket — real-time sync ──────────────────────────────────────
 
+let currentWs = null;
+
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const ws = new WebSocket(`${proto}//${location.host}`);
+  currentWs = ws;
 
-  ws.onopen = () => { setOnline(true); flush(); };
+  ws.onopen = () => {
+    setOnline(true);
+    flush();
+    if (opName) ws.send(JSON.stringify({ type: 'hello', name: opName }));
+  };
 
   ws.onmessage = ({ data }) => {
     const msg = JSON.parse(data);
@@ -381,9 +470,11 @@ function connect() {
     if (msg.type === 'config') {
       setCount(msg.count ?? count, msg.capacity);
     }
+    // msg.type === 'clients' ignoré côté compteur
   };
 
   ws.onclose = () => {
+    currentWs = null;
     setOnline(false);
     setTimeout(connect, 2000);
   };

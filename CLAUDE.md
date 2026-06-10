@@ -17,6 +17,7 @@ Node.js 18+ · Express · ws (WebSocket) · qrcode · Chart.js (CDN) · Vanilla 
 POST /api/count              {delta: ±1|±5, uuid: string} → {count, dup?, alert?}
 GET  /api/state              → {count, capacity}
 GET  /api/history?code=X     → {history:[{t,c}], count, capacity, totalIn, totalOut}
+GET  /api/clients?code=X     → {clients:[{name, connectedAt}]}
 POST /api/admin/config       {code, capacity?, newCode?, reset?} → {ok, capacity}
 GET  /api/qr?code=X          → {qr: dataURL, url}
 GET  /api/ips?code=X         → {ips: string[], port}
@@ -28,6 +29,12 @@ GET  /api/ips?code=X         → {ips: string[], port}
 | `init` | count, capacity | connexion d'un client |
 | `update` | count, delta, alert, capacity | opération reçue |
 | `config` | capacity | changement de config admin |
+| `clients` | names: string[] | connexion ou déconnexion d'un opérateur nommé |
+
+## WebSocket (client → server)
+| type | champs | moment |
+|---|---|---|
+| `hello` | name: string | juste après `ws.onopen`, si le prénom est connu |
 
 ## Décisions clés (non évidentes)
 - **UUID dedup** : chaque tap génère un UUID unique. Le serveur ignore les doublons → pas de double-comptage en cas de retry réseau.
@@ -39,6 +46,16 @@ GET  /api/ips?code=X         → {ips: string[], port}
 - `Math.max(0, count + delta)` côté serveur ET client → jamais négatif.
 - **Thème** : suit automatiquement le thème OS via `prefers-color-scheme`. Variables CSS redéfinies dans `@media (prefers-color-scheme: light)` sur les 3 pages. Les couleurs du graphique Chart.js sont recalculées via `chartPalette()` et mises à jour dynamiquement si le thème change pendant la session.
 - **Bouton +1 plus large sur mobile** : sur écrans tactiles (`pointer: coarse`), la grille des boutons principaux passe à `grid-template-columns: 1.18fr 1fr` → le bouton +1 est ~18 % plus large que −1. Choix intentionnel : l'entrée est l'action principale.
+- **Identité opérateur** : à la première connexion, un overlay plein écran demande le prénom. Stocké dans `localStorage('op_name')`. Envoyé au serveur via `{type:'hello', name}` à chaque reconnexion WS. Le serveur tient un `Map<ws, {name, connectedAt}>` et broadcast `{type:'clients', names:[]}` dès qu'un opérateur se connecte ou déconnecte. L'admin voit la liste en temps réel. Les noms sont dédupliqués (plusieurs onglets = 1 seul badge).
+- **Pas de nom dans les opérations** : le POST `/api/count` ne transporte pas le nom — les opérations restent anonymes côté API. Le suivi par opérateur nécessiterait d'ajouter `name` aux payloads et de l'indexer dans l'historique (voir Améliorations).
+
+## Améliorations prévues
+
+### Stats par opérateur (partie 2)
+- Ajouter `name` au payload `POST /api/count` et le stocker dans `state.history` : `{t, c, name}`
+- Endpoint `GET /api/history` retourne les entrées par opérateur
+- `stats.html` : vue globale (actuelle) + vue par opérateur (cliquer sur un badge pour filtrer le graphique)
+- Possibilité de désélectionner un opérateur pour l'exclure des stats affichées
 
 ## Démarrage
 ```bash
