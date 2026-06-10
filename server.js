@@ -155,6 +155,14 @@ wss.on('connection', (ws) => {
   wsClients.set(ws, { name: null, connectedAt: Date.now() });
   ws.send(JSON.stringify({ type: 'init', count: state.count, capacity: state.capacity }));
 
+  // Envoyer la liste courante immédiatement (utile pour la page admin qui vient de s'ouvrir)
+  const currentNames = [...new Set(
+    [...wsClients.values()].filter(c => c.name).map(c => c.name)
+  )];
+  if (currentNames.length > 0) {
+    ws.send(JSON.stringify({ type: 'clients', names: currentNames }));
+  }
+
   ws.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw);

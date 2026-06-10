@@ -308,6 +308,15 @@ function updateOperatorList(names) {
 function startWS() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const ws = new WebSocket(`${proto}//${location.host}`);
+
+  ws.onopen = () => {
+    // Resynchroniser la liste au (re)connect — filet de sécurité si un broadcast a été manqué
+    fetchWithTimeout(`/api/clients?code=${adminCode}`)
+      .then(r => r.json())
+      .then(d => updateOperatorList(d.clients.map(c => c.name)))
+      .catch(() => {});
+  };
+
   ws.onmessage = ({ data }) => {
     const msg = JSON.parse(data);
     if (msg.type === 'init' || msg.type === 'update') updateLiveCount(msg.count, msg.capacity);
