@@ -3,18 +3,23 @@ import { DurableObject } from 'cloudflare:workers';
 export class RegistryDO extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
-    this._code = null;   // string
-    this._events = null; // {[id]: {id,name,capacity,createdAt,archived}}
+    this._code     = null;  // admin code
+    this._permCode = null;  // U16: PERM code (null = désactivé)
+    this._events   = null;  // {[id]: {id,name,capacity,createdAt,archived}}
+    this._loaded   = false;
   }
 
   async _load() {
-    if (this._code !== null) return;
-    const [code, events] = await Promise.all([
+    if (this._loaded) return;
+    const [code, permCode, events] = await Promise.all([
       this.ctx.storage.get('adminCode'),
+      this.ctx.storage.get('permCode'),
       this.ctx.storage.get('events'),
     ]);
-    this._code = code ?? 'admin123';
-    this._events = events ?? {};
+    this._code     = code     ?? 'admin123';
+    this._permCode = permCode ?? null;
+    this._events   = events   ?? {};
+    this._loaded   = true;
   }
 
   async fetch(request) {
@@ -36,11 +41,41 @@ export class RegistryDO extends DurableObject {
       return Response.json({ ok: true });
     }
 
+    // U16: perm code endpoints
+    if (path === '/perm-code' && request.method === 'GET') {
+      return Response.json({ code: this._permCode });
+    }
+
+    if (path === '/perm-code' && request.method === 'POST') {
+      const c = body?.code;
+      this._permCode = (typeof c === 'string' && c.length >= 4) ? c : null;
+      await this.ctx.storage.put('permCode', this._permCode);
+      return Response.json({ ok: true });
+    }
+
     if (path === '/events' && request.method === 'GET') {
       const list = Object.values(this._events)
         .filter(e => !e.archived)
         .sort((a, b) => a.createdAt - b.createdAt);
       return Response.json({ events: list });
+    }
+
+    // U15: archived events list
+    if (path === '/events/archived' && request.method === 'GET') {
+      const list = Object.values(this._events)
+        .filter(e => e.archived)
+        .sort((a, b) => a.createdAt - b.createdAt);
+      return Response.json({ events: list });
+    }
+
+    // U15: delete event from registry
+    if (path === '/events/delete' && request.method === 'POST') {
+      const { id } = body ?? {};
+      if (id) {
+        delete this._events[id];
+        await this.ctx.storage.put('events', this._events);
+      }
+      return Response.json({ ok: true });
     }
 
     // POST /events — enregistre un nouvel événement dans l'index

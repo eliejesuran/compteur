@@ -96,6 +96,21 @@
     #empty-state { display: none; }
     #event-content { display: none; }
 
+    /* Dialogs */
+    dialog {
+      background: var(--bg); color: var(--text);
+      border: 1px solid var(--border); border-radius: 14px;
+      padding: 0; max-width: min(90vw, 380px); width: 100%;
+    }
+    dialog::backdrop { background: rgba(0,0,0,0.5); }
+    dialog .card { margin: 0; }
+    dialog p { font-size: 14px; color: var(--muted); margin: 8px 0 16px; line-height: 1.5; }
+
+    /* Archived event rows */
+    .arch-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-top: 1px solid var(--border); }
+    .arch-row > span { flex: 1; font-size: 14px; }
+    .arch-row button { width: auto; padding: 6px 12px; font-size: 13px; margin: 0; }
+
     /* ── Fond Bruxelles ── */
     #bxl-bg {
       position: fixed; inset: 0; z-index: -1;
@@ -136,7 +151,7 @@
     <h2>Événement</h2>
     <div class="event-row">
       <select id="event-sel" onchange="switchEvent(this.value)"></select>
-      <button onclick="newEvent()" title="Nouvel événement">+</button>
+      <button onclick="newEvent()" title="Nouvel événement" id="new-event-btn">+</button>
     </div>
   </div>
 
@@ -166,10 +181,11 @@
           </tr>
         </tfoot>
       </table>
-      <button class="secondary" onclick="createGroup()" style="margin-top:4px">+ Nouveau groupe</button>
+      <button class="secondary" id="new-group-btn" onclick="createGroup()" style="margin-top:4px">+ Nouveau groupe</button>
       <a id="stats-link" href="/stats.html" target="_blank" style="text-decoration:none; margin-top:8px; display:block;">
         <button class="secondary">Voir les graphiques →</button>
       </a>
+      <button class="secondary" id="export-btn" onclick="exportXLSX()" style="margin-top:8px;display:none">⬇ Exporter XLSX</button>
     </div>
 
     <!-- Connected operators -->
@@ -188,7 +204,7 @@
     </div>
 
     <!-- Capacity -->
-    <div class="card">
+    <div class="card" id="card-capacity">
       <h2>Seuil d'alerte (capacité max — total événement)</h2>
       <label>À partir de ce nombre total, tous les appareils vibrent et passent en rouge.</label>
       <input type="number" id="cap-input" placeholder="ex : 200" min="1">
@@ -197,7 +213,7 @@
     </div>
 
     <!-- Rename event -->
-    <div class="card">
+    <div class="card" id="card-rename">
       <h2>Renommer cet événement</h2>
       <input type="text" id="event-name-input" placeholder="Nom de l'événement" maxlength="40">
       <button onclick="renameEvent()">Renommer</button>
@@ -205,15 +221,24 @@
     </div>
 
     <!-- Change admin code -->
-    <div class="card">
+    <div class="card" id="card-code">
       <h2>Changer le code admin</h2>
       <input type="password" id="new-code" placeholder="Nouveau code (min. 4 caractères)">
       <button onclick="changeCode()">Changer le code</button>
       <div class="toast" id="code-toast"></div>
     </div>
 
+    <!-- PERM code (U16) -->
+    <div class="card" id="card-perm">
+      <h2>Code accès lecture seule (PERM)</h2>
+      <label>Accès en lecture uniquement — sans droit de modification. Laisser vide pour désactiver.</label>
+      <input type="password" id="perm-code-input" placeholder="Code PERM (min. 4 caractères)">
+      <button onclick="savePermCode()">Enregistrer</button>
+      <div class="toast" id="perm-toast"></div>
+    </div>
+
     <!-- Reset -->
-    <div class="card">
+    <div class="card" id="card-reset">
       <h2>Réinitialiser cet événement</h2>
       <label>Remet tous les groupes à 0 et efface l'historique.</label>
       <button class="danger" onclick="resetEvent()">Remettre à zéro</button>
@@ -221,21 +246,55 @@
     </div>
 
     <!-- Archive -->
-    <div class="card">
+    <div class="card" id="card-archive">
       <h2>Archiver cet événement</h2>
       <label>L'événement sera masqué. Les données sont conservées.</label>
       <button class="danger" onclick="archiveEvent()">Archiver</button>
     </div>
 
   </div><!-- /event-content -->
+
+  <!-- Archived events (U15) — admin only -->
+  <div class="card" id="card-archived" style="display:none">
+    <h2 style="cursor:pointer;user-select:none;display:flex;justify-content:space-between;align-items:center" onclick="toggleArchived()">
+      <span>Événements archivés (<span id="archived-count">0</span>)</span>
+      <span id="archived-toggle" style="font-size:10px">▶</span>
+    </h2>
+    <div id="archived-list" style="display:none"></div>
+  </div>
+
 </div><!-- /main-view -->
+
+<!-- Dialog: confirmation changement de code admin (U13) -->
+<dialog id="code-confirm-dialog">
+  <div class="card">
+    <h2>Confirmer le changement de code</h2>
+    <p>Nouveau code : <strong id="code-confirm-preview"></strong><br>Cette action vous déconnecte si vous perdez ce code.</p>
+    <button onclick="confirmCodeChange()">Confirmer</button>
+    <button class="secondary" style="margin-top:8px" onclick="document.getElementById('code-confirm-dialog').close()">Annuler</button>
+  </div>
+</dialog>
+
+<!-- Dialog: suppression définitive d'un événement archivé (U15) -->
+<dialog id="delete-confirm-dialog">
+  <div class="card">
+    <h2>Supprimer définitivement</h2>
+    <p>Supprimer <strong id="delete-confirm-name"></strong> ?<br>Cette action est irréversible — toutes les données seront perdues.</p>
+    <input type="hidden" id="delete-confirm-id">
+    <button class="danger" onclick="deleteArchivedEvent()">Supprimer définitivement</button>
+    <button class="secondary" style="margin-top:8px" onclick="document.getElementById('delete-confirm-dialog').close()">Annuler</button>
+  </div>
+</dialog>
 
 <script>
 'use strict';
 let adminCode = '';
+let userRole = 'admin';        // U16: 'admin' | 'perm'
 let currentEvent = '';
-let events = [];      // [{id, name, total, capacity, groups:[{id,name,count}]}]
+let events = [];
+let archivedEvents = [];       // U15
 let ws = null;
+let wsReconnectDelay = 1000;   // T2: backoff exponentiel
 
 // ── Helpers ──
 
@@ -265,10 +324,24 @@ async function login() {
   if (!code) return;
   const res = await fetchT(`/api/events?code=${encodeURIComponent(code)}`);
   if (!res.ok) { toast('login-err', 'Code incorrect', 'err'); return; }
+  const data = await res.json();
   adminCode = code;
+  userRole  = data.role ?? 'admin';  // U16
+  events    = data.events ?? [];
   document.getElementById('login-view').style.display = 'none';
   document.getElementById('main-view').style.display = 'block';
+  applyRoleUI();
   await loadAll();
+}
+
+// U16: applique les restrictions visuelles selon le rôle
+function applyRoleUI() {
+  const isAdmin = userRole === 'admin';
+  // card-archived est contrôlé par loadArchived() — ne pas l'inclure ici
+  ['card-capacity','card-rename','card-code','card-perm','card-reset','card-archive','new-event-btn','new-group-btn'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = isAdmin ? '' : 'none';
+  });
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -281,6 +354,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 async function loadAll() {
   await loadEvents();
+  if (userRole === 'admin') await loadArchived();
   if (events.length === 0) {
     document.getElementById('empty-state').style.display = 'block';
     document.getElementById('event-content').style.display = 'none';
@@ -298,6 +372,7 @@ async function loadAll() {
 async function loadEvents() {
   const data = await fetchT(`/api/events?code=${adminCode}`).then(r => r.json()).catch(() => ({ events: [] }));
   events = data.events || [];
+  if (data.role) userRole = data.role;
 }
 
 function renderEventSelector() {
@@ -307,6 +382,7 @@ function renderEventSelector() {
 }
 
 async function switchEvent(id) {
+  wsReconnectDelay = 1000; // T2: reset backoff on event switch
   currentEvent = id;
   document.getElementById('event-content').style.display = 'block';
   document.getElementById('empty-state').style.display = 'none';
@@ -322,6 +398,7 @@ async function loadEventUI(id) {
   document.getElementById('stats-link').href = `/stats.html?e=${encodeURIComponent(id)}`;
   document.getElementById('event-name-input').value = evt.name;
   document.getElementById('cap-input').value = evt.capacity;
+  document.getElementById('export-btn').style.display = ''; // show export for all roles
   renderGroupTable(evt.groups, evt.total, evt.capacity);
   renderQRSelector(evt.groups);
   if (evt.groups.length > 0) loadQR(evt.groups[0].id);
@@ -341,15 +418,16 @@ function renderGroupTable(groups, total, cap) {
   document.getElementById('grp-cap-sub').textContent = `/ ${cap}`;
 
   const tbody = document.getElementById('grp-body');
+  const isAdmin = userRole === 'admin';
   tbody.innerHTML = groups.map(g => {
     const pct = total > 0 ? Math.round(g.count / total * 100) : 0;
-    const canDel = groups.length > 1;
+    const canDel = isAdmin && groups.length > 1;
     return `<tr>
       <td class="g-name">${esc(g.name)}</td>
       <td class="g-count">${g.count}</td>
       <td class="g-pct">${pct}%</td>
       <td class="g-acts">
-        <button class="secondary" onclick="renameGroup('${esc(g.id)}','${esc(g.name)}')">✎</button>
+        ${isAdmin ? `<button class="secondary" onclick="renameGroup('${esc(g.id)}','${esc(g.name)}')">✎</button>` : ''}
         ${canDel ? `<button class="danger" onclick="deleteGroup('${esc(g.id)}')">×</button>` : ''}
       </td>
     </tr>`;
@@ -406,27 +484,33 @@ function updateOperatorList(clients) {
 // ── WebSocket ──
 
 function startWS(eventId) {
+  if (ws && ws.readyState < 2) ws.close();
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const myWs = new WebSocket(`${proto}//${location.host}?e=${encodeURIComponent(eventId)}`);
   ws = myWs;
+  let pingTimer = null;
 
   myWs.onopen = () => {
+    wsReconnectDelay = 1000; // T2: reset backoff on success
     loadIPs();
     fetchT(`/api/clients?code=${adminCode}&e=${eventId}`)
       .then(r => r.json())
       .then(d => { if (currentEvent === eventId) updateOperatorList(d.clients); })
       .catch(() => {});
+    pingTimer = setInterval(() => {
+      if (myWs.readyState === 1) myWs.send(JSON.stringify({ type: 'ping' }));
+    }, 25_000);
   };
 
   myWs.onmessage = ({ data }) => {
     if (currentEvent !== eventId) return;
     const msg = JSON.parse(data);
+    if (msg.type === 'pong') return;
     if (msg.type === 'init' || msg.type === 'update') {
       const evt = events.find(e => e.id === eventId);
       if (evt) {
         evt.total = msg.total;
-        evt.groups = msg.groups.map(g => ({ ...g, ...(evt.groups.find(eg => eg.id === g.id) || {}) }));
-        // sync counts from WS
+        evt.groups = msg.groups.map(g => ({ ...g, ...(evt.groups?.find(eg => eg.id === g.id) || {}) }));
         msg.groups.forEach(g => {
           const eg = evt.groups.find(x => x.id === g.id);
           if (eg) eg.count = g.count;
@@ -439,8 +523,11 @@ function startWS(eventId) {
   };
 
   myWs.onclose = () => {
+    clearInterval(pingTimer);
     if (currentEvent !== eventId) return;
-    setTimeout(() => { if (currentEvent === eventId) startWS(eventId); }, 2000);
+    const d = wsReconnectDelay;
+    wsReconnectDelay = Math.min(wsReconnectDelay * 2, 30000); // T2
+    setTimeout(() => { if (currentEvent === eventId) startWS(eventId); }, d);
   };
   myWs.onerror = () => myWs.close();
 }
@@ -533,13 +620,22 @@ async function renameEvent() {
   } else toast('name-toast', 'Erreur', 'err');
 }
 
-async function changeCode() {
+// U13: changeCode → dialog de confirmation
+function changeCode() {
   const newCode = document.getElementById('new-code').value.trim();
   if (newCode.length < 4) { toast('code-toast', 'Code trop court (min. 4 caractères)', 'err'); return; }
+  document.getElementById('code-confirm-preview').textContent = newCode;
+  document.getElementById('code-confirm-dialog').showModal();
+}
+
+async function confirmCodeChange() {
+  document.getElementById('code-confirm-dialog').close();
+  const newCode = document.getElementById('new-code').value.trim();
+  if (newCode.length < 4) return;
   const res = await fetchT('/api/admin/config', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code: adminCode, e: currentEvent, newCode }),
+    body: JSON.stringify({ code: adminCode, newCode }),
   }).then(r => r.json());
   if (res.ok) {
     adminCode = newCode;
@@ -567,6 +663,7 @@ async function archiveEvent() {
     body: JSON.stringify({ code: adminCode, e: currentEvent, archived: true }),
   });
   events = events.filter(e => e.id !== currentEvent);
+  await loadArchived();
   if (events.length > 0) {
     renderEventSelector();
     currentEvent = events[0].id;
@@ -580,7 +677,121 @@ async function archiveEvent() {
     document.getElementById('event-sel').innerHTML = '';
   }
 }
+
+// U16: enregistre le code PERM
+async function savePermCode() {
+  const val = document.getElementById('perm-code-input').value.trim();
+  if (val && val.length < 4) { toast('perm-toast', 'Code trop court (min. 4 caractères)', 'err'); return; }
+  const res = await fetchT('/api/admin/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: adminCode, newPermCode: val || null }),
+  }).then(r => r.json());
+  if (res.ok) {
+    document.getElementById('perm-code-input').value = '';
+    toast('perm-toast', val ? 'Code PERM enregistré' : 'Code PERM désactivé', 'ok');
+  } else toast('perm-toast', 'Erreur', 'err');
+}
+
+// U15: gestion des événements archivés
+async function loadArchived() {
+  const data = await fetchT(`/api/events/archived?code=${adminCode}`).then(r => r.json()).catch(() => ({ events: [] }));
+  archivedEvents = data.events || [];
+  const card = document.getElementById('card-archived');
+  document.getElementById('archived-count').textContent = archivedEvents.length;
+  if (archivedEvents.length > 0) {
+    card.style.display = '';
+    renderArchived();
+  } else {
+    card.style.display = 'none';
+  }
+}
+
+function toggleArchived() {
+  const list    = document.getElementById('archived-list');
+  const toggle  = document.getElementById('archived-toggle');
+  const isOpen  = list.style.display !== 'none';
+  list.style.display   = isOpen ? 'none' : 'block';
+  toggle.textContent   = isOpen ? '▶' : '▼';
+}
+
+function renderArchived() {
+  const list = document.getElementById('archived-list');
+  if (!archivedEvents.length) {
+    list.innerHTML = '<p style="font-size:13px;color:var(--muted);font-style:italic;padding-top:8px">Aucun événement archivé.</p>';
+    return;
+  }
+  list.innerHTML = archivedEvents.map(e => `
+    <div class="arch-row">
+      <span>${esc(e.name)}</span>
+      <button class="secondary" onclick="unarchiveEvent('${esc(e.id)}')">Désarchiver</button>
+      <button class="danger"    onclick="confirmDeleteEvent('${esc(e.id)}','${esc(e.name)}')">Supprimer</button>
+    </div>`).join('');
+}
+
+async function unarchiveEvent(id) {
+  const res = await fetchT('/api/admin/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: adminCode, e: id, archived: false }),
+  }).then(r => r.json());
+  if (res.ok) {
+    await loadAll();
+  }
+}
+
+function confirmDeleteEvent(id, name) {
+  document.getElementById('delete-confirm-name').textContent = name;
+  document.getElementById('delete-confirm-id').value = id;
+  document.getElementById('delete-confirm-dialog').showModal();
+}
+
+async function deleteArchivedEvent() {
+  document.getElementById('delete-confirm-dialog').close();
+  const id = document.getElementById('delete-confirm-id').value;
+  const res = await fetchT('/api/admin/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: adminCode, e: id, deleteEvent: true }),
+  }).then(r => r.json());
+  if (res.ok) {
+    archivedEvents = archivedEvents.filter(e => e.id !== id);
+    document.getElementById('archived-count').textContent = archivedEvents.length;
+    if (!archivedEvents.length) document.getElementById('card-archived').style.display = 'none';
+    else renderArchived();
+  }
+}
+
+// U8: Export XLSX (SheetJS)
+async function exportXLSX() {
+  if (!currentEvent || typeof XLSX === 'undefined') return;
+  try {
+    const data = await fetchT(`/api/history?code=${adminCode}&e=${currentEvent}`).then(r => r.json());
+    const evt  = events.find(e => e.id === currentEvent);
+    const wb   = XLSX.utils.book_new();
+
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+      ['Événement', evt?.name ?? currentEvent],
+      ['Total actuel', data.total],
+      ['Capacité', data.capacity],
+      ['Total entrées', data.totalIn],
+      ['Total sorties', data.totalOut],
+    ]), 'Résumé');
+
+    const histRows = [['Horodatage', 'Total']];
+    for (const { t, c } of data.history) histRows.push([new Date(t).toLocaleString('fr-FR'), c]);
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(histRows), 'Historique');
+
+    const grpRows = [['Groupe', 'Compteur', 'Entrées', 'Sorties']];
+    for (const g of data.groups) grpRows.push([g.name, g.count, g.totalIn, g.totalOut]);
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(grpRows), 'Groupes');
+
+    const fname = (evt?.name ?? 'export').replace(/[^\w]/g, '_');
+    XLSX.writeFile(wb, `${fname}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  } catch { alert('Erreur lors de l\'export'); }
+}
 </script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 <script>(function(){const W=120,R="                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  ...                                                                                                       .-.                                                                                                       +#+                                                                                                      .#.#                                                                                                      +#-#.                                                                                                    .#+.#+                                                                                                    -#. -#.                                                                                                  .#-+-.#+                                                                                                  -#. +.+#.                                                                                                 -#.--- #+                                                                                                 -+.---.##                                                                                                -++--...-#+.                                                                                             -#+.-..##-..-                                                                                             ++.-#####+. +                                                                                             +-.-#######--.                                                                                            -+..#++###.++.                                                                                            .++#....#.+---                                                                                             - -##.--.+- +                                                                                            .-+#--#+..+-.+                                                                                            -#+.######.-..                                                                                            ++ ###+###..++                                                                                            +.-###-###.-+#                                                                                            +.-+##+### .##                                                                                            #-  -#.#.#. #+                                                                                            +---.#.# #.+#.                                                                                            -+++-.+-.+.++-.                                                                                           -+##-   .-..+-..-.                                               ...                                  .-. ++#-.-++.#. +# ---                                               --+.                                .+-+.#+-### ###+ -#-.#.-                                             .+-+-                                .-.+ # -###-####. +.-##-                                           ..+#.++                                .+.--+#+#+######..+-+-#.                                          .+-#+-##+-                               +...-#..+#-#+##.#++--+.                                         --###+-#+.-                              .+##-----.#+#+#+.#+#.--                                          -.+-#--##+.                              -.-#+.- ..#-###- ++#-+#-                                      .-.- #+#..++--.                             .##+ -..--#---#-..-.#.++                                    .....+-#.###.#-++.-++----.                     --- ..--+ .++##++- +-++                                    +-++#..#..--+#-.+#+---.-+# ------...          ... .  --.- -##. - +-.##-                                   +#### .+-##+-#  .    . -.++#.  ..+#+-+++-.    . .-..--. . .-+.+# #. #-+                                   .###+.-##-.+##. .  . - ..   ----..-- . .-- .---#---++       #-##-#..#+.                                   ++++-     ..+#- .  -#--.-. . +-. -++ --... +++..-#-       ..- +-+.- -.                                 +.-++#++ .   - .#+ ..-#+.-..-.---+..-..-. -...- - . +#-      - +-# + - -- .-.            .                +----+#-  +#---+#- .-.-++.-.--- +++. -   - -..-+..+..##      + .-# -..-###+-+-++-...    . .               #-.++--  .+.+--.++#+#-.--.+.--.+--.++  ... -... .....+#.     #.-.. .. -+#.. .---+--.    -.-               +  ..-...-.+-+-.-. -#+++ +-#+#..#+.#-...-...  -- .-. .##.    # +.... ...#-  .. --.++-  .-.-.              -.....++-+-+-#. +-##-++.+#+#.+.+#- --. +-..+..--.+--  .##. . # -+++. ---#- .+... .-.++ .-#-.              + . .  -.#.#--###--#..-+-++###+#.#.--.#-#-#--.#+ ###. ..#-   -. #.#.######..---..- +.+#-. .               --+-+-...-.#.-. ##+#....   -- ..+ ##+---#+++.+-+.#.#...+-+.. ..+-#+##.##+#+-. ----++  -#-+-               ####-++. ..+-+--##+#++.+-+--##-#+##.# #+-++++. ..-+#+.+..+ .  .+-+.####..##-... .+#+ ..## ..              #.--.+#....+#-#+#+.###.#..-#-+.++## #-#-#++.+..-##+ #-#+.# . ....   -+. -+++#####- -++##+ ...   .-++-      --  -+ . .-#.#+#+.###-#..+# +-+###+# #.--+ #.##### + #--+  .  .     .  -.--#-++.-. ###.++- .   +++++-+      . ---- ..+-.+--####+-.+#--+.-#+++--#---+.# #####.#+# ..  .-+-.   .-...  -- .. ...+#-#-..-...---.#-+-     . . +##...-----.-.+-.###-.+#-- . -+-- ---.#.#####-#+#.    .+ ..  ----+###++ .++-- -+ -.---.- .+#.#- +   .  -..-##..- -.-#+###.+-#-+..#--  --..  .-+-# ### #+-.-..   .- ..  +--..-. .#-#+ .+###--.+. .- .-##+.--      - .-##-. -.+++--+-.-#+#+.-.+...-..  ..++##.#+#-+.+#-  .. -.-. . ---+++ .#+#+--. ..  ..----+--##-- .+      -. ..##  -.++-#+#-.++##.+-++-#-#  . +.##+# #-#.##++##+...+-+###+---- #-#+-# #.--.   .  -..#..++. . #   .. . ..--++##--+.-.# #+++. +# +.#.#+#+. + - #-#.#-#-+..-#+ .-   -+. . ..# # .# -+. -....  -..# ----.++-      . -...-  -.#--+-######.-##--+ .+-###.... #+#.#.#-#.##.#.-#####+.---.+###  #   #-. ...  ...#. - .+.+-     .  ....-  .-+. .- #+##---.. .   --#+# . .--+-+#-###+## #+##.   ++.+- #### .#####...++##++##-.- -.-#+-   ......  ...-++-.... + ...+--.+.-..- #+-+-.--.. -- -+#+#-.#--++ .-+.++  ####. +--..-  --.    .+--#-.++..   ..--...  .- -. .+ -.#-..-.#+.+-..-##+- -. - - .--.-+-+--..+.++ .-. --..+#.##+#####..-..+.++++. +-+.+.+-       .  .  .--+.-+.+++#. ++++-#+----##-+#+.++#+#++---. #+#+#+---##-++-...#++####.#-#+.+.#+#. -##- ++#+-     . ..     .- -..-.+#.---+ --.+ -+-+ #+##+.+.+##+#-###.#.##+#. +####+. ..-##.-##+##..-+-###- -#.--....             ...-. . -.#-----.-.-+.-.--.-- --------..#.#-##+-#..#++##.-#+#+- --.+. +. ++--###+#-.-#.#-##+  .   .-...    ..  .. +.#.- -+---++.+..-.-. .+---.- .-++-++-######. ##..+#####+..++#+.--#..-+####++#.### +-++   - .      ...--.-++#.-.+++.-#-----...   -..- -.-.-.  .##.+.-###+#+ ..-.+#+..-+++-++.. .+--.-+.. ...  ...   .  .            .--.-  ..--- -..--. ...  ..   ....---.#.+-..-+#+.---..+-... --......... ...               ----........-----......--++-..-.-----.     .        ..- -       .. ...      .               ... .                                   . .   .         .            ..       .  ...           ..     .--.    . .                                . ..      ..     .          . .        ....... ...  .     .   .....-.    . .         .                                          --.   . .        . .....  ..       . .-. . .   ...     .                                                                                                           ";const l=[];for(let i=0;i<R.length;i+=W)l.push(R.slice(i,i+W));document.getElementById('bxl-art').textContent=l.join('\n');})();</script>
 </body>
 </html>

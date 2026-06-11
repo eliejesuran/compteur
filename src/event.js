@@ -13,8 +13,23 @@ function hexId() {
 export class EventDO extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
-    this._s = null;      // state object
-    this._seen = new Set(); // seenOps — not persisted, comme le server.js actuel
+    this._s    = null;
+    this._seen = new Set();
+    this._rl   = new Map(); // T3: token-bucket rate limiter — ip → {tokens, lastMs}
+  }
+
+  // T3: token bucket — capacity=2000, refill=20/s. Returns false if rate limited.
+  _rl_check(ip) {
+    const CAPACITY = 2000, RATE = 20;
+    const now = Date.now();
+    let b = this._rl.get(ip);
+    if (!b) { b = { tokens: CAPACITY, lastMs: now }; this._rl.set(ip, b); }
+    const elapsed = (now - b.lastMs) / 1000;
+    b.tokens = Math.min(CAPACITY, b.tokens + elapsed * RATE);
+    b.lastMs = now;
+    if (b.tokens < 1) return false;
+    b.tokens -= 1;
+    return true;
   }
 
   async _load() {
@@ -110,6 +125,10 @@ export class EventDO extends DurableObject {
 
     // POST /count
     if (path === '/count' && request.method === 'POST') {
+      const ip = request.headers.get('cf-connecting-ip') ?? request.headers.get('x-real-ip') ?? 'unknown';
+      if (!this._rl_check(ip)) {
+        return new Response('Too Many Requests', { status: 429, headers: { 'Retry-After': '1' } });
+      }
       const { delta, uuid, name: opName, g } = body ?? {};
       if (!uuid || ![-5, -1, 1, 5].includes(delta) || !g) {
         return Response.json({ error: 'invalid' }, { status: 400 });
@@ -286,6 +305,7 @@ export class EventDO extends DurableObject {
   async webSocketMessage(ws, message) {
     try {
       const msg = JSON.parse(message);
+      if (msg.type === 'ping') { ws.send(JSON.stringify({ type: 'pong' })); return; }
       if (msg.type === 'hello' && typeof msg.name === 'string') {
         const name = msg.name.trim().slice(0, 32);
         if (!name) return;

@@ -147,6 +147,7 @@ let capacity = 100;
 let currentEvent = '';
 let statsWs = null;
 let events = [];
+let wsReconnectDelay = 1000; // T2: backoff exponentiel
 
 function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -203,6 +204,7 @@ document.getElementById('code').addEventListener('keydown', e => {
 // ── Switch event ──
 
 async function switchEvent(id) {
+  wsReconnectDelay = 1000; // T2: reset backoff on event switch
   currentEvent = id;
   if (statsWs) { statsWs.close(); statsWs = null; }
   if (chart) { chart.destroy(); chart = null; }
@@ -380,6 +382,8 @@ function connectWS(eventId) {
   const myWs = new WebSocket(`${proto}//${location.host}?e=${encodeURIComponent(eventId)}`);
   statsWs = myWs;
 
+  myWs.onopen = () => { wsReconnectDelay = 1000; }; // T2: reset on success
+
   myWs.onmessage = ({ data }) => {
     if (statsWs !== myWs) return;
     const msg = JSON.parse(data);
@@ -415,7 +419,9 @@ function connectWS(eventId) {
   myWs.onclose = () => {
     if (statsWs !== myWs) return;
     statsWs = null;
-    setTimeout(() => { if (currentEvent === eventId) connectWS(eventId); }, 2000);
+    const d = wsReconnectDelay;
+    wsReconnectDelay = Math.min(wsReconnectDelay * 2, 30000); // T2
+    setTimeout(() => { if (currentEvent === eventId) connectWS(eventId); }, d);
   };
   myWs.onerror = () => myWs.close();
 }

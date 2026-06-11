@@ -21,8 +21,19 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Group: {id, name, count, totalIn, totalOut, opStats: {[name]: {in, out}}}
 let state = {
   adminCode: 'admin123',
+  permCode:  null,   // U16: null = PERM désactivé
   events: {},
 };
+
+// --- Auth helpers ---
+
+function checkAdmin(code) { return code === state.adminCode; }
+
+function checkAuth(code) {
+  if (code === state.adminCode) return 'admin';
+  if (state.permCode && code === state.permCode) return 'perm';
+  return null;
+}
 
 // Runtime-only (not persisted)
 const eventSeenOps = new Map(); // eventId → Set<uuid>
@@ -170,9 +181,10 @@ app.get('/api/state', (req, res) => {
   });
 });
 
-// List events — admin
+// List events — admin or perm
 app.get('/api/events', (req, res) => {
-  if (req.query.code !== state.adminCode) return res.status(403).json({ error: 'forbidden' });
+  const role = checkAuth(req.query.code);
+  if (!role) return res.status(403).json({ error: 'forbidden' });
   const events = Object.values(state.events)
     .filter(e => !e.archived)
     .map(e => ({
@@ -181,12 +193,26 @@ app.get('/api/events', (req, res) => {
       createdAt: e.createdAt, groups: groupSummary(e),
     }))
     .sort((a, b) => a.createdAt - b.createdAt);
+  res.json({ events, role });
+});
+
+// List archived events — admin only
+app.get('/api/events/archived', (req, res) => {
+  if (!checkAdmin(req.query.code)) return res.status(403).json({ error: 'forbidden' });
+  const events = Object.values(state.events)
+    .filter(e => e.archived)
+    .map(e => ({
+      id: e.id, name: e.name,
+      total: eventTotal(e), capacity: e.capacity,
+      createdAt: e.createdAt,
+    }))
+    .sort((a, b) => a.createdAt - b.createdAt);
   res.json({ events });
 });
 
 // Create event — auto-creates one "Principal" group
 app.post('/api/events', (req, res) => {
-  if (req.body?.code !== state.adminCode) return res.status(403).json({ error: 'forbidden' });
+  if (!checkAdmin(req.body?.code)) return res.status(403).json({ error: 'forbidden' });
   const id = crypto.randomBytes(3).toString('hex');
   const name = (typeof req.body.name === 'string' ? req.body.name.trim() : '').slice(0, 40) || 'Nouvel événement';
   state.events[id] = makeEvent(id, name);
@@ -198,7 +224,7 @@ app.post('/api/events', (req, res) => {
 // Create group within an event
 app.post('/api/groups', (req, res) => {
   const { code, e, name } = req.body ?? {};
-  if (code !== state.adminCode) return res.status(403).json({ error: 'forbidden' });
+  if (!checkAdmin(code)) return res.status(403).json({ error: 'forbidden' });
   const evt = state.events[e];
   if (!evt) return res.status(404).json({ error: 'event not found' });
   const id = crypto.randomBytes(3).toString('hex');
@@ -208,9 +234,9 @@ app.post('/api/groups', (req, res) => {
   res.json({ id, name: groupName });
 });
 
-// History + per-group stats — admin
+// History + per-group stats — admin or perm
 app.get('/api/history', (req, res) => {
-  if (req.query.code !== state.adminCode) return res.status(403).json({ error: 'forbidden' });
+  if (!checkAuth(req.query.code)) return res.status(403).json({ error: 'forbidden' });
   const evt = state.events[req.query.e];
   if (!evt) return res.status(404).json({ error: 'event not found' });
   const totalIn  = Object.values(evt.groups).reduce((s, g) => s + g.totalIn, 0);
@@ -230,13 +256,21 @@ app.get('/api/history', (req, res) => {
 
 // Admin: configure event or group
 app.post('/api/admin/config', (req, res) => {
-  const { code, e, g, capacity, newCode, reset, name, archived, deleteGroup } = req.body ?? {};
-  if (code !== state.adminCode) return res.status(403).json({ error: 'forbidden' });
+  const { code, e, g, capacity, newCode, newPermCode, reset, name, archived, deleteGroup, deleteEvent } = req.body ?? {};
+  if (!checkAdmin(code)) return res.status(403).json({ error: 'forbidden' });
 
   if (typeof newCode === 'string' && newCode.length >= 4) state.adminCode = newCode;
+  if (newPermCode !== undefined) {
+    state.permCode = (typeof newPermCode === 'string' && newPermCode.length >= 4) ? newPermCode : null;
+  }
 
   const evt = state.events[e];
   if (evt) {
+    if (deleteEvent === true) {
+      delete state.events[e];
+      eventSeenOps.delete(e);
+      return res.json({ ok: true });
+    }
     if (g) {
       // Group-level
       const grp = evt.groups[g];
@@ -276,9 +310,9 @@ app.post('/api/admin/config', (req, res) => {
   res.json({ ok: true });
 });
 
-// QR code for a specific group URL
+// QR code for a specific group URL — admin or perm
 app.get('/api/qr', async (req, res) => {
-  if (req.query.code !== state.adminCode) return res.status(403).json({ error: 'forbidden' });
+  if (!checkAuth(req.query.code)) return res.status(403).json({ error: 'forbidden' });
   const { e, g } = req.query;
   if (!e || !g) return res.status(400).json({ error: 'e and g required' });
   const host = req.headers.host;
@@ -288,9 +322,9 @@ app.get('/api/qr', async (req, res) => {
   res.json({ qr, url });
 });
 
-// Connected operators for an event (with group names)
+// Connected operators for an event (with group names) — admin or perm
 app.get('/api/clients', (req, res) => {
-  if (req.query.code !== state.adminCode) return res.status(403).json({ error: 'forbidden' });
+  if (!checkAuth(req.query.code)) return res.status(403).json({ error: 'forbidden' });
   const evt = state.events[req.query.e];
   if (!evt) return res.status(404).json({ error: 'event not found' });
   const seen = new Set();
@@ -303,9 +337,9 @@ app.get('/api/clients', (req, res) => {
   res.json({ clients });
 });
 
-// Local IPs
+// Local IPs — admin or perm
 app.get('/api/ips', (req, res) => {
-  if (req.query.code !== state.adminCode) return res.status(403).json({ error: 'forbidden' });
+  if (!checkAuth(req.query.code)) return res.status(403).json({ error: 'forbidden' });
   res.json({ ips: getLocalIPs(), port: PORT });
 });
 
@@ -418,4 +452,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, server, state, eventSeenOps, trimSeenOps, wsClients };
+module.exports = { app, server, state, eventSeenOps, trimSeenOps, wsClients, checkAdmin, checkAuth };

@@ -34,6 +34,18 @@ async function getAdminCode(env) {
   return (await r.json()).code;
 }
 
+async function getPermCode(env) {
+  const r = await registryStub(env).fetch(iReq('/perm-code'));
+  return (await r.json()).code ?? null;
+}
+
+async function resolveRole(env, code) {
+  const [adminCode, permCode] = await Promise.all([getAdminCode(env), getPermCode(env)]);
+  if (code === adminCode) return 'admin';
+  if (permCode && code === permCode) return 'perm';
+  return null;
+}
+
 async function generateQR(url) {
   // QRCode.toString avec type svg n'utilise pas Canvas — fonctionne en Workers
   const svg = await QRCode.toString(url, { type: 'svg', width: 400, margin: 2 });
@@ -87,13 +99,18 @@ async function handleAPI(request, env, url, path) {
     return eventStub(env, e).fetch(iReq(`/state?g=${g}`));
   }
 
-  // ── Vérification admin ─────────────────────────────────────────────────────
+  // ── Auth ───────────────────────────────────────────────────────────────────
 
-  const code      = method === 'GET' ? url.searchParams.get('code') : body?.code;
-  const adminCode = await getAdminCode(env);
-  if (code !== adminCode) return Response.json({ error: 'forbidden' }, { status: 403 });
+  const code = method === 'GET' ? url.searchParams.get('code') : body?.code;
+  const role = await resolveRole(env, code);
+  if (!role) return Response.json({ error: 'forbidden' }, { status: 403 });
 
-  // ── Routes admin ───────────────────────────────────────────────────────────
+  // Routes réservées admin (écriture / actions destructives)
+  const adminOnly = () => role !== 'admin'
+    ? Response.json({ error: 'forbidden' }, { status: 403 })
+    : null;
+
+  // ── Routes lecture (admin + perm) ──────────────────────────────────────────
 
   if (path === '/api/events' && method === 'GET') {
     const reg     = registryStub(env);
@@ -111,10 +128,20 @@ async function handleAPI(request, env, url, path) {
       }
     }));
 
-    return Response.json({ events });
+    return Response.json({ events, role });
+  }
+
+  // U15: liste des événements archivés — admin only
+  if (path === '/api/events/archived' && method === 'GET') {
+    const denied = adminOnly(); if (denied) return denied;
+    const reg = registryStub(env);
+    const r   = await reg.fetch(iReq('/events/archived'));
+    const { events: meta } = await r.json();
+    return Response.json({ events: meta });
   }
 
   if (path === '/api/events' && method === 'POST') {
+    const denied = adminOnly(); if (denied) return denied;
     const name = (typeof body?.name === 'string' ? body.name.trim() : '').slice(0, 40) || 'Nouvel événement';
     const id   = hexId();
 
@@ -125,6 +152,7 @@ async function handleAPI(request, env, url, path) {
   }
 
   if (path === '/api/groups' && method === 'POST') {
+    const denied = adminOnly(); if (denied) return denied;
     const { e, name: groupName } = body ?? {};
     if (!e) return Response.json({ error: 'e required' }, { status: 400 });
     return eventStub(env, e).fetch(iReq('/groups', 'POST', { name: groupName }));
@@ -137,10 +165,20 @@ async function handleAPI(request, env, url, path) {
   }
 
   if (path === '/api/admin/config' && method === 'POST') {
-    const { e, g, capacity, newCode, reset, name, archived, deleteGroup } = body ?? {};
+    const denied = adminOnly(); if (denied) return denied;
+    const { e, g, capacity, newCode, newPermCode, reset, name, archived, deleteGroup, deleteEvent } = body ?? {};
 
     if (typeof newCode === 'string' && newCode.length >= 4) {
       await registryStub(env).fetch(iReq('/admin-code', 'POST', { code: newCode }));
+    }
+
+    if (newPermCode !== undefined) {
+      await registryStub(env).fetch(iReq('/perm-code', 'POST', { code: newPermCode }));
+    }
+
+    if (e && deleteEvent === true) {
+      await registryStub(env).fetch(iReq('/events/delete', 'POST', { id: e }));
+      return Response.json({ ok: true });
     }
 
     if (e) {

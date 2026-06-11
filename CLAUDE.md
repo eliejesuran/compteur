@@ -86,7 +86,7 @@ Le client opérateur extrait son propre groupe via `groups.find(g => g.id === GR
 - Problème actuel : si un opérateur perd brièvement le réseau (tunnel instable, WiFi coupé 2 s), il disparaît de la liste WS et son badge s'efface côté admin.
 - Solution : garder un opérateur dans la liste pendant 30 s après sa déconnexion WS. Le serveur maintient un `Map<name, disconnectedAt>` ; il ne retire le nom du broadcast `clients` que si `Date.now() - disconnectedAt > 30_000`. À la reconnexion, la grâce est annulée immédiatement.
 
-### U5 Scanner le QR code depuis mobile (opérateur)
+### ~~U5 Scanner le QR code depuis mobile (opérateur)~~ ✅ FAIT
 - Sur `index.html`, ajouter un bouton "Scanner un QR code" (icône caméra) qui ouvre `navigator.mediaDevices` pour lire un QR code via la caméra arrière.
 - Utile quand un opérateur rejoint en cours d'événement sans avoir l'URL : il scanne l'écran de l'admin au lieu de taper l'URL à la main.
 - il peut passer d'un event à l'autre
@@ -108,10 +108,10 @@ Le client opérateur extrait son propre groupe via `groups.find(g => g.id === GR
 - Admin : page de gestion des sessions — créer, renommer, archiver, changer de session active. Les opérateurs rejoignent une session via son QR code dédié.
 - Complexité notable : le state devient `{sessions: {[id]: SessionState}}`, la persistance et les broadcasts sont scopés par session.
 
-### U8 Export xlsx de la session (admin)
-- Permettre un export de la session. Pas nécessaire de faire un import. 
+### ~~U8 Export xlsx de la session (admin)~~ ✅ FAIT
+- SheetJS CDN dans `admin.html` · bouton "⬇ Exporter XLSX" · 3 feuilles : Résumé, Historique, Groupes.
 
-### U9 Redéfinition du bouton remettre à zéro
+### ~~U9 Redéfinition du bouton remettre à zéro~~ PLUS D'ACTUALITE
 - Remet le compteur à 0, efface l'historique, efface le seuil.
 
 ### U10 Graphiques par groupe
@@ -119,44 +119,39 @@ Le client opérateur extrait son propre groupe via `groups.find(g => g.id === GR
 ### U11 adapter le manifest.json
 - Pour avoir une app "admin" logo +1 en rouge et une app "cliqueur" logo +1 en bleu
 
-### U12 Export CSV de l'historique (stats.html)
+### ~~U12 Export CSV de l'historique (stats.html)~~ ✅ FAIT dans U8
 - Ajouter un bouton "Exporter CSV" sur `stats.html` qui télécharge les données de `GET /api/history` (colonnes : horodatage, total).
 - Inclure une colonne par groupe si des groupes existent.
 - Pas de dépendance externe — `Blob` + `URL.createObjectURL` suffit.
 
-### U13 Confirmation avant changement de code admin
-- Sur `admin.html`, afficher un `<dialog>` modal (pas `window.confirm`) avant de valider un nouveau code admin.
-- Le modal montre l'ancien code masqué et demande confirmation explicite ("Confirmer le nouveau code : …").
+### ~~U13 Confirmation avant changement de code admin~~ ✅ FAIT
+- `<dialog>` natif dans `admin.html` · affiche le nouveau code avant confirmation.
 
 ### U14 Indicateur de synchronisation de la file d'attente
 - Sur `index.html`, afficher une icône animée (spinner CSS) sur le badge de file d'attente pendant le flush vers le serveur.
 - Disparaît une fois la file vide et la connexion rétablie.
 - Renforce la confiance de l'opérateur sur les réseaux instables.
 
-### U15 Gestion des événements archivés (admin)
-- Sur `admin.html`, section repliable "Événements archivés" listant les événements avec `archived: true`.
-- Actions disponibles : désarchiver, supprimer définitivement (avec confirmation `<dialog>`).
-- API existante `POST /api/admin/config {archived: false}` suffit pour désarchiver.
+### ~~U15 Gestion des événements archivés (admin)~~ ✅ FAIT
+- Section repliable dans `admin.html` · désarchiver + supprimer (avec `<dialog>`) · `POST /api/admin/config {deleteEvent:true}` · registre nettoyé.
+
+### ~~U16 Nouveau rôle "PERM"~~ ✅ FAIT
+- `permCode` dans RegistryDO + server.js · login détecte `role:perm` · UI masque capacité/reset/archive/code/perm/groupes-edit pour PERM · configurable via admin.
 
 ### T1 Cache QR code côté EventDO
 - `GET /api/qr` régénère le SVG à chaque requête — coûteux.
 - Stocker le résultat dans une propriété en mémoire de l'EventDO (`this._qrCache = {url, svg}`), invalidée uniquement si l'URL change (événement/groupe renommé).
 - Réduction de latence sur admin avec QR affiché en permanence.
 
-### T2 Backoff exponentiel WS (toutes les pages)
-- Les 3 pages (`index.html`, `admin.html`, `stats.html`) reconnectent le WebSocket toutes les 2s fixes.
-- Remplacer par un backoff exponentiel : 1s → 2s → 4s → 8s → max 30s, reset à 0 sur succès.
-- Évite la tempête de reconnexions simultanées après un redémarrage serveur.
+### ~~T2 Backoff exponentiel WS (toutes les pages)~~ ✅ FAIT
+- `index.html`, `admin.html`, `stats.html` : 1s→2s→4s→…→30s max · reset à 1s sur succès ou changement d'événement.
 
-### T3 Rate limiting sur `/api/count` (Workers)
-- Éviter le flood accidentel sans bloquer le flush de file d'attente (reconnexion après coupure = burst légitime de ~100 ops).
-- Utiliser un **token bucket** par IP en mémoire DO : `capacity=200, refillRate=20/s`. Un opérateur qui reconnecte vide son queue d'un coup (≤200 ops) ; un flood soutenu est plafonné à 20/s.
-- Structure : `Map<ip, {tokens, lastRefill}>` — recalcul lazy à chaque requête.
-- Retourner HTTP 429 avec `Retry-After: 1` ; le client ré-enqueue sans perte.
+### ~~T3 Rate limiting sur `/api/count` (Workers)~~ ✅ FAIT
+- Token bucket dans `EventDO._rl` : capacity=2000, refill=20/s par IP (`cf-connecting-ip`) · HTTP 429 + `Retry-After: 1`.
 
 ### ~~B1 "Adresses Réseau" toujours indiquée~~ ✅ FAIT
 
-### ~B2: fond des boutons secondaires restent en foncé alors que le thème est clair~~ ✅ FAIT
+### ~~B2: fond des boutons secondaires restent en foncé alors que le thème est clair~~ ✅ FAIT
 
 ### ~~I1 passer à un serveur en ligne (cloudflare)~~ ✅ FAIT
 - `src/index.js` + `src/registry.js` + `src/event.js` — réécriture complète pour Cloudflare Workers.

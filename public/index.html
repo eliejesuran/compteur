@@ -575,6 +575,19 @@ async function flush() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(op),
         });
+        if (!res.ok) {
+          if (res.status < 500) {
+            // 4xx — requête invalide ou événement introuvable, l'op ne passera jamais
+            queue.shift();
+            localStorage.setItem('op_queue', JSON.stringify(queue));
+            renderQueueBadge();
+          } else {
+            // 5xx — erreur serveur transitoire, réessayer plus tard
+            setOnline(false);
+            break;
+          }
+          continue;
+        }
         const data = await res.json();
         queue.shift();
         localStorage.setItem('op_queue', JSON.stringify(queue));
@@ -601,6 +614,7 @@ setInterval(() => { if (navigator.onLine && queue.length > 0) flush(); }, 2000);
 // ── WebSocket — real-time sync ──────────────────────────────────────
 
 let currentWs = null;
+let _wsDelay = 1000; // T2: backoff exponentiel
 
 function connect() {
   if (!EVENT_ID || !GROUP_ID) {
@@ -612,11 +626,16 @@ function connect() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const ws = new WebSocket(`${proto}//${location.host}?e=${encodeURIComponent(EVENT_ID)}&g=${encodeURIComponent(GROUP_ID)}`);
   currentWs = ws;
+  let pingTimer = null;
 
   ws.onopen = () => {
+    _wsDelay = 1000; // T2: reset backoff on success
     setOnline(true);
     flush();
     if (opName) ws.send(JSON.stringify({ type: 'hello', name: opName }));
+    pingTimer = setInterval(() => {
+      if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'ping' }));
+    }, 25_000);
   };
 
   ws.onmessage = ({ data }) => {
@@ -636,13 +655,16 @@ function connect() {
   };
 
   ws.onclose = (e) => {
+    clearInterval(pingTimer);
     currentWs = null;
     setOnline(false);
     if (e.code === 4004) {
       document.getElementById('status-text').textContent = 'Événement ou groupe introuvable';
       return;
     }
-    setTimeout(connect, 2000);
+    const d = _wsDelay;
+    _wsDelay = Math.min(_wsDelay * 2, 30000); // T2: backoff 1→2→4→…→30 s
+    setTimeout(connect, d);
   };
   ws.onerror = () => ws.close();
 }
