@@ -19,7 +19,6 @@
         --text: #0f172a; --muted: #64748b; --accent: #2563eb;
         --ok: #16a34a; --warn: #d97706; --danger: #dc2626;
       }
-      button.secondary { background: #e2e8f0; color: #0f172a; }
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -50,7 +49,7 @@
     }
     button:hover { filter: brightness(1.1); }
     button:active { filter: brightness(0.85); }
-    button.secondary { background: #334155; }
+    button.secondary { background: var(--border); color: var(--text); }
     button.danger { background: var(--danger); }
     button + button { margin-top: 8px; }
     .toast {
@@ -357,14 +356,18 @@ async function loadQR(groupId) {
 }
 
 async function loadIPs() {
-  if (document.getElementById('ip-list').dataset.loaded) return;
+  const el = document.getElementById('ip-list');
+  if (el.dataset.loaded) return;
   try {
     const ipd = await fetchT(`/api/ips?code=${adminCode}`).then(r => r.json());
-    if (ipd.ips.length) {
-      document.getElementById('ip-list').innerHTML = `Adresses réseau :<br>` +
+    if (ipd.ips && ipd.ips.length) {
+      el.innerHTML = `Adresses réseau :<br>` +
         ipd.ips.map(ip => `<a href="http://${ip}:${ipd.port}" target="_blank">http://${ip}:${ipd.port}</a>`).join('<br>');
-      document.getElementById('ip-list').dataset.loaded = 'true';
+    } else {
+      const base = window.location.origin;
+      el.innerHTML = `Adresse :<br><a href="${base}" target="_blank">${base}</a>`;
     }
+    el.dataset.loaded = 'true';
   } catch {}
 }
 
