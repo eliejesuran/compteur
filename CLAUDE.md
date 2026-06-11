@@ -154,9 +154,9 @@ Le client opérateur extrait son propre groupe via `groups.find(g => g.id === GR
 - Structure : `Map<ip, {tokens, lastRefill}>` — recalcul lazy à chaque requête.
 - Retourner HTTP 429 avec `Retry-After: 1` ; le client ré-enqueue sans perte.
 
-### B1 "Adresses Réseau" toujours indiquée
+### ~~B1 "Adresses Réseau" toujours indiquée~~ ✅ FAIT
 
-### B2: fond des boutons secondaire restent en foncé alors que le thème est clair
+### ~B2: fond des boutons secondaires restent en foncé alors que le thème est clair~~ ✅ FAIT
 
 ### ~~I1 passer à un serveur en ligne (cloudflare)~~ ✅ FAIT
 - `src/index.js` + `src/registry.js` + `src/event.js` — réécriture complète pour Cloudflare Workers.
