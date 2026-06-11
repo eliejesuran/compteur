@@ -1,0 +1,17 @@
+{
+  "name": "Admin Compteur",
+  "short_name": "Admin",
+  "description": "Administration du compteur de présences",
+  "start_url": "/admin.html",
+  "display": "standalone",
+  "background_color": "#7f1d1d",
+  "theme_color": "#dc2626",
+  "icons": [
+    {
+      "src": "/icon-admin.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

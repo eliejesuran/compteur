@@ -148,6 +148,8 @@ let currentEvent = '';
 let statsWs = null;
 let events = [];
 let wsReconnectDelay = 1000; // T2: backoff exponentiel
+const GROUP_COLORS = ['#f59e0b','#22c55e','#a855f7','#f97316','#06b6d4','#ec4899'];
+let groupDatasets = {}; // groupId → dataset index
 
 function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -208,7 +210,7 @@ async function switchEvent(id) {
   currentEvent = id;
   if (statsWs) { statsWs.close(); statsWs = null; }
   if (chart) { chart.destroy(); chart = null; }
-  peak = 0; totalIn = 0;
+  peak = 0; totalIn = 0; groupDatasets = {};
   document.getElementById('s-peak').textContent = '–';
   document.getElementById('s-in').textContent   = '–';
   document.getElementById('s-count').textContent = '–';
@@ -232,7 +234,7 @@ async function loadEventStats(eventId) {
   updateCount(data.total);
 
   if (chart) { chart.destroy(); chart = null; }
-  buildChart(data.history, data.total, capacity);
+  buildChart(data.history, data.total, capacity, data.groups || []);
 
   renderGroups(data.groups || []);
   renderOpStats(data.groups || []);
@@ -320,20 +322,35 @@ function fmt(ts) {
   return new Date(ts).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
 }
 
-function buildChart(history, currentTotal, cap) {
+function buildChart(history, currentTotal, cap, groups) {
   const labels = [...history.map(h => fmt(h.t)), fmt(Date.now())];
   const values = [...history.map(h => h.c), currentTotal];
   const p = chartPalette();
+  groupDatasets = {};
+
+  const datasets = [
+    { label:'Présents', data:values, borderColor:'#3b82f6', backgroundColor:'rgba(59,130,246,0.08)', fill:true, tension:0.3, pointRadius:0, pointHoverRadius:4, borderWidth:2.5 },
+    { label:'Capacité', data:Array(labels.length).fill(cap), borderColor:'rgba(239,68,68,0.55)', borderDash:[6,4], borderWidth:1.5, pointRadius:0, fill:false },
+  ];
+
+  if (groups.length > 1) {
+    groups.forEach((g, i) => {
+      const color = GROUP_COLORS[i % GROUP_COLORS.length];
+      datasets.push({
+        label: g.name,
+        data: [...Array(history.length).fill(null), g.count],
+        borderColor: color,
+        backgroundColor: 'transparent',
+        fill: false, tension: 0.3, pointRadius: 0, pointHoverRadius: 4,
+        borderWidth: 1.5, borderDash: [4, 2],
+      });
+      groupDatasets[g.id] = datasets.length - 1;
+    });
+  }
 
   chart = new Chart(document.getElementById('chart').getContext('2d'), {
     type: 'line',
-    data: {
-      labels,
-      datasets: [
-        { label:'Présents', data:values, borderColor:'#3b82f6', backgroundColor:'rgba(59,130,246,0.08)', fill:true, tension:0.3, pointRadius:0, pointHoverRadius:4, borderWidth:2.5 },
-        { label:'Capacité', data:Array(labels.length).fill(cap), borderColor:'rgba(239,68,68,0.55)', borderDash:[6,4], borderWidth:1.5, pointRadius:0, fill:false },
-      ],
-    },
+    data: { labels, datasets },
     options: {
       responsive:true, maintainAspectRatio:false, animation:false,
       interaction:{ mode:'index', intersect:false },
@@ -364,14 +381,38 @@ function buildChart(history, currentTotal, cap) {
   });
 }
 
-function pushPoint(total) {
+function pushPoint(total, groups) {
   if (!chart) return;
   const MAX = 300;
   const ds = chart.data;
   ds.labels.push(fmt(Date.now()));
   ds.datasets[0].data.push(total);
   ds.datasets[1].data.push(capacity);
-  if (ds.labels.length > MAX) { ds.labels.shift(); ds.datasets[0].data.shift(); ds.datasets[1].data.shift(); }
+
+  if (groups && groups.length > 1) {
+    groups.forEach((g, i) => {
+      const idx = groupDatasets[g.id];
+      if (idx !== undefined) {
+        ds.datasets[idx].data.push(g.count);
+      } else {
+        // Group appeared after chart was built
+        const color = GROUP_COLORS[i % GROUP_COLORS.length];
+        ds.datasets.push({
+          label: g.name,
+          data: [...Array(ds.labels.length - 1).fill(null), g.count],
+          borderColor: color, backgroundColor: 'transparent',
+          fill: false, tension: 0.3, pointRadius: 0, pointHoverRadius: 4,
+          borderWidth: 1.5, borderDash: [4, 2],
+        });
+        groupDatasets[g.id] = ds.datasets.length - 1;
+      }
+    });
+  }
+
+  if (ds.labels.length > MAX) {
+    ds.labels.shift();
+    ds.datasets.forEach(d => d.data.shift());
+  }
   chart.update('none');
 }
 
@@ -391,19 +432,18 @@ function connectWS(eventId) {
       updateCount(msg.total);
       totalIn += (msg.delta > 0 ? msg.delta : 0);
       document.getElementById('s-in').textContent = totalIn;
-      pushPoint(msg.total);
-    }
-    if (msg.type === 'update' && msg.groups) {
-      // Refresh group table counts from WS
-      const tbody = document.getElementById('grp-body');
-      if (tbody.children.length > 0) {
-        // Partial update: just update counts in existing rows
-        msg.groups.forEach((g, i) => {
-          const row = tbody.children[i];
-          if (row) row.children[1].textContent = g.count;
-        });
-        const foot = document.getElementById('grp-foot');
-        if (foot.children[0]) foot.children[0].children[1].textContent = msg.total;
+      pushPoint(msg.total, msg.groups);
+      // Refresh group table counts
+      if (msg.groups) {
+        const tbody = document.getElementById('grp-body');
+        if (tbody.children.length > 0) {
+          msg.groups.forEach((g, i) => {
+            const row = tbody.children[i];
+            if (row) row.children[1].textContent = g.count;
+          });
+          const foot = document.getElementById('grp-foot');
+          if (foot.children[0]) foot.children[0].children[1].textContent = msg.total;
+        }
       }
     }
     if (msg.type === 'update' && msg.capacity !== undefined) {
