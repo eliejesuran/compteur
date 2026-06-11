@@ -1,0 +1,17 @@
+{
+  "name": "Compteur Événement",
+  "short_name": "Compteur",
+  "description": "Compteur de présences temps réel",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#111827",
+  "theme_color": "#111827",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

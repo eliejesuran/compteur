@@ -6,7 +6,11 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#111827" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f9fafb" media="(prefers-color-scheme: light)">
   <title>Compteur</title>
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
   <style>
     :root {
       --bg: #111827;
@@ -17,6 +21,26 @@
       --blue: #3b82f6;
       --text: #f9fafb;
       --muted: #6b7280;
+      --track: #374151;
+      --btn-border: #374151;
+      --btn-color: #9ca3af;
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f9fafb;
+        --surface: #ffffff;
+        --ok: #16a34a;
+        --warn: #d97706;
+        --danger: #dc2626;
+        --blue: #2563eb;
+        --text: #111827;
+        --muted: #6b7280;
+        --track: #e5e7eb;
+        --btn-border: #d1d5db;
+        --btn-color: #4b5563;
+      }
+      .btn-small:active, .btn-small.tapping { background: #e5e7eb !important; color: #111827 !important; border-color: #9ca3af !important; }
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
@@ -73,6 +97,75 @@
 
     #cap-label { margin-left: auto; font-size: 13px; opacity: 0.7; }
 
+    #op-name-btn {
+      display: none;
+      padding: 3px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(59,130,246,0.4);
+      background: rgba(59,130,246,0.12);
+      color: var(--blue);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      touch-action: manipulation;
+      flex-shrink: 0;
+    }
+    #op-name-btn:active { background: rgba(59,130,246,0.25); }
+
+    #scan-btn {
+      display: none;
+      width: 32px; height: 32px;
+      border: none; background: none;
+      padding: 0; cursor: pointer;
+      color: var(--muted);
+      flex-shrink: 0;
+      touch-action: manipulation;
+      margin-left: 8px;
+    }
+    #scan-btn svg { display: block; }
+    #scan-btn:active { color: var(--blue); }
+
+    /* Scanner overlay */
+    #scan-overlay {
+      display: none;
+      position: fixed; inset: 0;
+      background: #000;
+      z-index: 300;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+    #scan-overlay.open { display: flex; }
+    #scan-video {
+      width: 100%; max-width: 480px;
+      border-radius: 0;
+    }
+    #scan-reticle {
+      position: absolute;
+      width: min(65vw, 260px); height: min(65vw, 260px);
+      border: 3px solid rgba(255,255,255,0.8);
+      border-radius: 18px;
+      pointer-events: none;
+    }
+    #scan-hint {
+      position: absolute;
+      bottom: max(80px, env(safe-area-inset-bottom) + 60px);
+      color: rgba(255,255,255,0.65);
+      font-size: 13px;
+      text-align: center;
+      padding: 0 24px;
+    }
+    #scan-close {
+      position: absolute;
+      top: max(16px, env(safe-area-inset-top) + 8px);
+      right: 16px;
+      width: 40px; height: 40px;
+      border: none; border-radius: 999px;
+      background: rgba(255,255,255,0.15);
+      color: #fff; font-size: 20px;
+      cursor: pointer; touch-action: manipulation;
+    }
+
     /* ── Count area ── */
     #count-area {
       flex: 1;
@@ -104,12 +197,19 @@
       color: var(--muted);
       margin-top: 4px;
     }
+    #group-sub {
+      display: none;
+      font-size: 13px;
+      color: var(--muted);
+      margin-top: 3px;
+      font-variant-numeric: tabular-nums;
+    }
 
     /* Capacity progress bar */
     #bar-wrap {
       width: min(65%, 280px);
       height: 6px;
-      background: #374151;
+      background: var(--track);
       border-radius: 3px;
       margin-top: 14px;
       overflow: hidden;
@@ -148,7 +248,7 @@
       transition: transform 0.08s, filter 0.08s;
       letter-spacing: -0.02em;
     }
-    .btn-main:active { transform: scale(0.94); filter: brightness(0.8); }
+    .btn-main:active, .btn-main.tapping { transform: scale(0.94); filter: brightness(0.8); }
     #btn-p { background: #1d4ed8; }
     #btn-m { background: #991b1b; }
 
@@ -164,17 +264,22 @@
     .btn-small {
       flex: 1;
       height: 46px;
-      border: 1.5px solid #374151;
+      border: 1.5px solid var(--btn-border);
       border-radius: 12px;
       background: transparent;
-      color: #9ca3af;
+      color: var(--btn-color);
       font-size: 15px;
       font-weight: 700;
       cursor: pointer;
       touch-action: manipulation;
       transition: background 0.1s, color 0.1s, border-color 0.1s;
     }
-    .btn-small:active { background: #374151; color: #fff; border-color: #4b5563; }
+    .btn-small:active, .btn-small.tapping { background: #374151; color: #fff; border-color: #4b5563; }
+
+    /* +1 légèrement plus large sur écrans tactiles */
+    @media (pointer: coarse) {
+      #main-btns { grid-template-columns: 1.18fr 1fr; }
+    }
 
     /* ── Alert overlay ── */
     #alert-overlay {
@@ -189,6 +294,54 @@
       0%, 100% { background: rgba(239,68,68,0.08); }
       50%       { background: rgba(239,68,68,0.22); }
     }
+
+    /* ── Overlay saisie du prénom ── */
+    #name-overlay {
+      display: none;
+      position: fixed; inset: 0;
+      background: var(--bg);
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      z-index: 200;
+    }
+    #name-card {
+      background: var(--surface);
+      border-radius: 22px;
+      padding: 32px 24px 28px;
+      width: 100%;
+      max-width: 300px;
+      text-align: center;
+    }
+    #name-card h2 { font-size: 22px; font-weight: 800; margin-bottom: 8px; }
+    #name-card p  { color: var(--muted); font-size: 13px; line-height: 1.5; margin-bottom: 20px; }
+    #name-input {
+      width: 100%;
+      padding: 14px;
+      border-radius: 12px;
+      border: 1.5px solid var(--btn-border);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 20px;
+      font-weight: 700;
+      text-align: center;
+      outline: none;
+      margin-bottom: 14px;
+      -webkit-appearance: none;
+    }
+    #name-input:focus { border-color: var(--blue); }
+    #name-card .btn-start {
+      width: 100%;
+      height: 52px;
+      border: none;
+      border-radius: 14px;
+      background: var(--blue);
+      color: #fff;
+      font-size: 17px;
+      font-weight: 800;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
   </style>
 </head>
 <body>
@@ -196,37 +349,118 @@
 <div id="statusbar">
   <div id="dot"></div>
   <span id="status-text">Connexion…</span>
+  <button id="op-name-btn" onclick="editName()"></button>
   <span id="queue-badge"></span>
   <span id="cap-label">– / –</span>
+  <button id="scan-btn" onclick="openScanner()" title="Scanner un QR code" aria-label="Scanner un QR code">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/>
+      <path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/>
+      <rect x="7" y="7" width="3" height="3"/><rect x="14" y="7" width="3" height="3"/>
+      <rect x="7" y="14" width="3" height="3"/><rect x="14" y="14" width="3" height="3"/>
+    </svg>
+  </button>
+</div>
+
+<!-- Scanner overlay -->
+<div id="scan-overlay">
+  <video id="scan-video" autoplay muted playsinline></video>
+  <canvas id="scan-canvas" style="display:none"></canvas>
+  <div id="scan-reticle"></div>
+  <div id="scan-hint">Pointez la caméra vers le QR code</div>
+  <button id="scan-close" onclick="closeScanner()">✕</button>
 </div>
 
 <div id="count-area">
   <div id="count">–</div>
   <div id="count-label">personnes</div>
+  <div id="group-sub"></div>
   <div id="bar-wrap"><div id="bar" style="width:0%"></div></div>
 </div>
 
 <div id="main-btns">
-  <button class="btn-main" id="btn-p" onclick="tap(1)">+1</button>
-  <button class="btn-main" id="btn-m" onclick="tap(-1)">−1</button>
+  <button class="btn-main" id="btn-p">+1</button>
+  <button class="btn-main" id="btn-m">−1</button>
 </div>
 
 <div id="small-btns">
-  <button class="btn-small" onclick="tap(5)">+5</button>
-  <button class="btn-small" onclick="tap(-5)">−5</button>
+  <button class="btn-small" id="btn-p5">+5</button>
+  <button class="btn-small" id="btn-m5">−5</button>
 </div>
 
 <div id="alert-overlay"></div>
 
+<!-- Overlay prénom — affiché uniquement à la première connexion -->
+<div id="name-overlay">
+  <div id="name-card">
+    <h2>Votre prénom</h2>
+    <p>Visible par l'administrateur<br>de l'événement</p>
+    <input id="name-input" type="text" placeholder="ex : Alice" maxlength="32"
+           autocomplete="given-name" enterkeyhint="go">
+    <button class="btn-start" onclick="saveName()">Commencer</button>
+  </div>
+</div>
+
 <script>
 'use strict';
-let count = 0;
+let count = 0;       // total événement
+let groupCount = 0;  // compteur de ce groupe
+let groupName = '';  // nom de ce groupe
 let capacity = 100;
 let alertActive = false;
 
-// Offline queue: persisted in localStorage so ops survive page reloads
+// Paramètres d'URL — obligatoires
+const EVENT_ID = new URLSearchParams(location.search).get('e') || '';
+const GROUP_ID = new URLSearchParams(location.search).get('g') || '';
+
+// Identité de l'opérateur — demandée une fois, stockée en localStorage
+let opName = '';
+try { opName = localStorage.getItem('op_name') || ''; } catch {}
+
+if (!opName) {
+  document.getElementById('name-overlay').style.display = 'flex';
+} else {
+  document.getElementById('name-overlay').style.display = 'none';
+  updateNameDisplay();
+}
+
+document.getElementById('name-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') saveName();
+});
+
+function updateNameDisplay() {
+  const btn = document.getElementById('op-name-btn');
+  if (opName) {
+    btn.textContent = opName;
+    btn.style.display = 'inline-flex';
+  } else {
+    btn.style.display = 'none';
+  }
+}
+
+function editName() {
+  document.getElementById('name-input').value = opName;
+  document.getElementById('name-overlay').style.display = 'flex';
+  setTimeout(() => document.getElementById('name-input').focus(), 50);
+}
+
+function saveName() {
+  const val = document.getElementById('name-input').value.trim().slice(0, 32);
+  if (!val) { document.getElementById('name-input').focus(); return; }
+  opName = val;
+  try { localStorage.setItem('op_name', opName); } catch {}
+  document.getElementById('name-overlay').style.display = 'none';
+  updateNameDisplay();
+  if (currentWs?.readyState === 1) currentWs.send(JSON.stringify({ type: 'hello', name: opName }));
+}
+
+// Offline queue — vider si format ancien (sans champ 'e')
 let queue = [];
-try { queue = JSON.parse(localStorage.getItem('op_queue') || '[]'); } catch {}
+try {
+  const raw = JSON.parse(localStorage.getItem('op_queue') || '[]');
+  queue = (raw.length > 0 && !raw[0].e) ? [] : raw;
+  if (raw.length > 0 && !raw[0].e) localStorage.removeItem('op_queue');
+} catch {}
 renderQueueBadge();
 
 // ── UI helpers ──────────────────────────────────────────────────────
@@ -238,7 +472,7 @@ function setCount(n, cap) {
   const el = document.getElementById('count');
   el.textContent = count;
   el.classList.remove('bump');
-  void el.offsetWidth; // force reflow for animation restart
+  void el.offsetWidth;
   el.classList.add('bump');
 
   const pct = capacity > 0 ? count / capacity : 0;
@@ -247,10 +481,18 @@ function setCount(n, cap) {
 
   const body = document.body;
   body.classList.remove('state-warn', 'state-danger');
-  if (pct >= 1)   body.classList.add('state-danger');
+  if (pct >= 1)        body.classList.add('state-danger');
   else if (pct >= 0.8) body.classList.add('state-warn');
 
   triggerAlert(pct >= 1);
+}
+
+function setGroupCount(c, name) {
+  groupCount = c;
+  groupName = name;
+  const el = document.getElementById('group-sub');
+  el.textContent = `dont ${c} en ${name}`;
+  el.style.display = 'block';
 }
 
 function triggerAlert(active) {
@@ -282,8 +524,16 @@ function renderQueueBadge() {
 
 function tap(delta) {
   const uuid = crypto.randomUUID();
-  setCount(count + delta); // optimistic
-  sendOp({ delta, uuid });
+  // Mise à jour optimiste : total ET compteur du groupe
+  setCount(count + delta);
+  setGroupCount(Math.max(0, groupCount + delta), groupName);
+
+  const op = { delta, uuid, e: EVENT_ID, g: GROUP_ID };
+  if (opName) op.name = opName;
+  queue.push(op);
+  localStorage.setItem('op_queue', JSON.stringify(queue));
+  renderQueueBadge();
+  flush();
 }
 
 function fetchWithTimeout(url, opts, ms = 5000) {
@@ -293,85 +543,200 @@ function fetchWithTimeout(url, opts, ms = 5000) {
     .finally(() => clearTimeout(timer));
 }
 
-async function sendOp(op) {
+// Verrou : une seule instance de flush peut tourner à la fois.
+let flushing = false;
+
+async function flush() {
+  if (flushing) return;
+  flushing = true;
   try {
-    const res = await fetchWithTimeout('/api/count', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(op),
-    });
-    const data = await res.json();
-    if (!data.dup) setCount(data.count);
-    triggerAlert(data.alert);
-  } catch {
-    // Network failure — queue and retry when online
-    queue.push(op);
-    localStorage.setItem('op_queue', JSON.stringify(queue));
-    renderQueueBadge();
-    setOnline(false);
-  }
-}
-
-async function flushQueue() {
-  while (queue.length > 0) {
-    const op = queue[0];
-    try {
-      const res = await fetchWithTimeout('/api/count', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(op),
-      });
-      const data = await res.json();
-      queue.shift();
-      localStorage.setItem('op_queue', JSON.stringify(queue));
-      renderQueueBadge();
-      if (!data.dup) setCount(data.count);
-    } catch {
-      break; // still offline, stop trying
+    while (queue.length > 0) {
+      const op = queue[0];
+      try {
+        const res = await fetchWithTimeout('/api/count', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(op),
+        });
+        const data = await res.json();
+        queue.shift();
+        localStorage.setItem('op_queue', JSON.stringify(queue));
+        renderQueueBadge();
+        if (!data.dup) setCount(data.total);
+        triggerAlert(data.alert);
+      } catch {
+        setOnline(false);
+        break;
+      }
     }
+  } finally {
+    flushing = false;
+    if (queue.length === 0) setOnline(true);
   }
-  if (queue.length === 0) setOnline(true);
 }
 
-// Flush on reconnect events
-window.addEventListener('online', flushQueue);
+window.addEventListener('online', flush);
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && queue.length > 0) flushQueue();
+  if (!document.hidden && queue.length > 0) flush();
 });
-setInterval(() => { if (navigator.onLine && queue.length > 0) flushQueue(); }, 2000);
+setInterval(() => { if (navigator.onLine && queue.length > 0) flush(); }, 2000);
 
 // ── WebSocket — real-time sync ──────────────────────────────────────
 
-function connect() {
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const ws = new WebSocket(`${proto}//${location.host}`);
+let currentWs = null;
 
-  ws.onopen = () => { setOnline(true); flushQueue(); };
+function connect() {
+  if (!EVENT_ID || !GROUP_ID) {
+    document.getElementById('status-text').textContent = 'URL invalide — utilisez le QR code';
+    document.getElementById('dot').className = 'offline';
+    return;
+  }
+
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${proto}//${location.host}?e=${encodeURIComponent(EVENT_ID)}&g=${encodeURIComponent(GROUP_ID)}`);
+  currentWs = ws;
+
+  ws.onopen = () => {
+    setOnline(true);
+    flush();
+    if (opName) ws.send(JSON.stringify({ type: 'hello', name: opName }));
+  };
 
   ws.onmessage = ({ data }) => {
     const msg = JSON.parse(data);
     if (msg.type === 'init' || msg.type === 'update') {
-      setCount(msg.count, msg.capacity);
-      if (msg.alert) triggerAlert(true);
+      setCount(msg.total, msg.capacity);
+      // Mettre à jour le compteur du groupe de cet opérateur
+      if (msg.groups && GROUP_ID) {
+        const myGroup = msg.groups.find(g => g.id === GROUP_ID);
+        if (myGroup) setGroupCount(myGroup.count, myGroup.name);
+      }
     }
-    if (msg.type === 'config') {
-      setCount(msg.count ?? count, msg.capacity);
+    if (msg.type === 'init' && msg.eventName) {
+      document.title = `${msg.eventName} – Compteur`;
     }
+    // msg.type === 'clients' ignoré côté compteur
   };
 
-  ws.onclose = () => {
+  ws.onclose = (e) => {
+    currentWs = null;
     setOnline(false);
+    if (e.code === 4004) {
+      document.getElementById('status-text').textContent = 'Événement ou groupe introuvable';
+      return;
+    }
     setTimeout(connect, 2000);
   };
   ws.onerror = () => ws.close();
 }
 
+// ── Tap binding — pointerdown : capture chaque toucher immédiatement
+function bindTapBtn(el, delta) {
+  el.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    el.classList.add('tapping');
+    tap(delta);
+  });
+  const clearTapping = () => el.classList.remove('tapping');
+  el.addEventListener('pointerup',     clearTapping);
+  el.addEventListener('pointercancel', clearTapping);
+  el.addEventListener('pointerleave',  clearTapping);
+}
+bindTapBtn(document.getElementById('btn-p'),   1);
+bindTapBtn(document.getElementById('btn-m'),  -1);
+bindTapBtn(document.getElementById('btn-p5'),  5);
+bindTapBtn(document.getElementById('btn-m5'), -5);
+
+// ── QR Scanner ─────────────────────────────────────────────────────
+
+let scanStream = null;
+let scanRaf = null;
+
+function initScanBtn() {
+  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+    document.getElementById('scan-btn').style.display = 'block';
+  }
+}
+
+async function openScanner() {
+  const overlay = document.getElementById('scan-overlay');
+  const video   = document.getElementById('scan-video');
+  overlay.classList.add('open');
+  try {
+    scanStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' } },
+      audio: false,
+    });
+    video.srcObject = scanStream;
+    video.play();
+    video.addEventListener('loadedmetadata', startScanLoop, { once: true });
+  } catch {
+    document.getElementById('scan-hint').textContent = 'Caméra non accessible';
+  }
+}
+
+function startScanLoop() {
+  const video  = document.getElementById('scan-video');
+  const canvas = document.getElementById('scan-canvas');
+  const ctx    = canvas.getContext('2d');
+
+  function loop() {
+    if (!scanStream) return;
+    if (video.readyState === video.HAVE_ENOUGH_DATA) {
+      canvas.width  = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const code = window.jsQR && jsQR(imageData.data, imageData.width, imageData.height, {
+        inversionAttempts: 'dontInvert',
+      });
+      if (code?.data) {
+        closeScanner();
+        handleScannedURL(code.data);
+        return;
+      }
+    }
+    scanRaf = requestAnimationFrame(loop);
+  }
+  scanRaf = requestAnimationFrame(loop);
+}
+
+function closeScanner() {
+  document.getElementById('scan-overlay').classList.remove('open');
+  cancelAnimationFrame(scanRaf);
+  scanRaf = null;
+  if (scanStream) {
+    scanStream.getTracks().forEach(t => t.stop());
+    scanStream = null;
+  }
+  document.getElementById('scan-video').srcObject = null;
+  document.getElementById('scan-hint').textContent = 'Pointez la caméra vers le QR code';
+}
+
+function handleScannedURL(raw) {
+  let url;
+  try { url = new URL(raw); } catch { return; }
+  const e = url.searchParams.get('e');
+  const g = url.searchParams.get('g');
+  if (!e || !g) return;
+  window.location.href = `/?e=${encodeURIComponent(e)}&g=${encodeURIComponent(g)}`;
+}
+
+initScanBtn();
+
 // Boot: fetch initial state then open WebSocket
-fetchWithTimeout('/api/state')
-  .then(r => r.json())
-  .then(d => setCount(d.count, d.capacity))
-  .catch(() => {})
-  .finally(connect);
+if (EVENT_ID && GROUP_ID) {
+  fetchWithTimeout(`/api/state?e=${encodeURIComponent(EVENT_ID)}&g=${encodeURIComponent(GROUP_ID)}`)
+    .then(r => r.json())
+    .then(d => {
+      setCount(d.total, d.capacity);
+      setGroupCount(d.groupCount, d.groupName);
+    })
+    .catch(() => {})
+    .finally(connect);
+} else {
+  connect(); // connect() affichera l'erreur URL invalide
+}
 </script>
 </body>
 </html>

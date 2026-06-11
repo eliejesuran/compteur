@@ -3,124 +3,81 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#0f172a" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f8fafc" media="(prefers-color-scheme: light)">
   <title>Stats – Compteur</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
   <style>
     :root {
-      --bg: #0f172a;
-      --surface: #1e293b;
-      --border: #334155;
-      --text: #f8fafc;
-      --muted: #94a3b8;
-      --accent: #3b82f6;
-      --ok: #22c55e;
-      --warn: #f59e0b;
-      --danger: #ef4444;
+      --bg: #0f172a; --surface: #1e293b; --border: #334155;
+      --text: #f8fafc; --muted: #94a3b8; --accent: #3b82f6;
+      --ok: #22c55e; --warn: #f59e0b; --danger: #ef4444;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f8fafc; --surface: #ffffff; --border: #e2e8f0;
+        --text: #0f172a; --muted: #64748b; --accent: #2563eb;
+        --ok: #16a34a; --warn: #d97706; --danger: #dc2626;
+      }
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      background: var(--bg);
-      color: var(--text);
+      background: var(--bg); color: var(--text);
       font-family: system-ui, -apple-system, sans-serif;
-      min-height: 100dvh;
-      padding: 16px;
-      max-width: 700px;
-      margin: 0 auto;
+      min-height: 100dvh; padding: 16px;
+      max-width: 700px; margin: 0 auto;
     }
     h1 { font-size: 22px; font-weight: 800; margin-bottom: 20px; }
     h2 {
-      font-size: 11px;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: 0.07em;
-      font-weight: 600;
-      margin-bottom: 12px;
+      font-size: 11px; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.07em;
+      font-weight: 600; margin-bottom: 12px;
     }
-    .card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 16px;
-      margin-bottom: 12px;
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px; margin-bottom: 12px; }
+    input[type="password"], select {
+      width: 100%; padding: 11px 14px; border-radius: 10px;
+      border: 1px solid var(--border); background: var(--bg);
+      color: var(--text); font-size: 16px; margin-bottom: 8px;
+      outline: none; appearance: auto;
     }
-    /* Login */
-    input[type="password"] {
-      width: 100%;
-      padding: 11px 14px;
-      border-radius: 10px;
-      border: 1px solid var(--border);
-      background: var(--bg);
-      color: var(--text);
-      font-size: 16px;
-      margin-bottom: 8px;
-      outline: none;
-    }
-    input:focus { border-color: var(--accent); }
+    input:focus, select:focus { border-color: var(--accent); }
     button {
-      width: 100%;
-      padding: 12px;
-      border-radius: 10px;
-      border: none;
-      background: var(--accent);
-      color: #fff;
-      font-size: 15px;
-      font-weight: 700;
-      cursor: pointer;
+      width: 100%; padding: 12px; border-radius: 10px; border: none;
+      background: var(--accent); color: #fff; font-size: 15px;
+      font-weight: 700; cursor: pointer;
     }
-    .toast {
-      padding: 9px 14px;
-      border-radius: 8px;
-      font-size: 13px;
-      text-align: center;
-      margin-top: 8px;
-      display: none;
-    }
+    .toast { padding: 9px 14px; border-radius: 8px; font-size: 13px; text-align: center; margin-top: 8px; display: none; }
     .toast.err { background: rgba(239,68,68,0.15); color: var(--danger); }
-    /* Stat grid */
-    .stat-grid {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 10px;
-      margin-bottom: 12px;
-    }
+    /* Stat tiles */
+    .stat-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 12px; }
     @media (min-width: 420px) { .stat-grid { grid-template-columns: repeat(4, 1fr); } }
-    .stat-tile {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 14px 10px;
-      text-align: center;
-    }
-    .stat-val {
-      font-size: 34px;
-      font-weight: 900;
-      line-height: 1;
-      font-variant-numeric: tabular-nums;
-    }
+    .stat-tile { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 14px 10px; text-align: center; }
+    .stat-val { font-size: 34px; font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; }
     .stat-lbl { font-size: 11px; color: var(--muted); margin-top: 5px; text-transform: uppercase; letter-spacing: 0.05em; }
     /* Live dot */
-    .live-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      font-size: 11px;
-      color: var(--ok);
-      margin-bottom: 10px;
-    }
-    .live-dot {
-      width: 7px; height: 7px;
-      border-radius: 50%;
-      background: var(--ok);
-      box-shadow: 0 0 5px var(--ok);
-      animation: blink 1.5s ease-in-out infinite;
-    }
+    .live-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--ok); margin-bottom: 10px; }
+    .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 5px var(--ok); animation: blink 1.5s ease-in-out infinite; }
     @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
-    /* Chart */
     .chart-wrap { position: relative; height: 240px; }
-    /* Visibility of sections */
-    #login-view { }
+    /* Group table */
+    .grp-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .grp-table td { padding: 8px 4px; }
+    .grp-table tr + tr td { border-top: 1px solid var(--border); }
+    .grp-table .g-name { font-weight: 700; }
+    .grp-table .g-val  { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; min-width: 52px; }
+    .grp-table tfoot td { border-top: 2px solid var(--border); font-weight: 800; padding-top: 9px; }
+    /* Operator table */
+    .op-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
+    .op-row:last-child { border-bottom: none; }
+    .op-name { flex: 1; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .op-grp  { font-size: 12px; color: var(--muted); }
+    .op-in   { color: var(--ok);     font-weight: 700; font-variant-numeric: tabular-nums; min-width: 44px; text-align: right; }
+    .op-out  { color: var(--danger); font-weight: 700; font-variant-numeric: tabular-nums; min-width: 44px; text-align: right; }
+    .op-net  { color: var(--muted);  font-size: 12px;  min-width: 52px; text-align: right; }
+    /* Views */
+    #login-view {}
     #stats-view { display: none; }
-    /* Back link */
     .back { font-size: 13px; color: var(--muted); margin-bottom: 16px; display: block; text-decoration: none; }
     .back:hover { color: var(--text); }
   </style>
@@ -140,35 +97,43 @@
 
 <!-- ── Stats ── -->
 <div id="stats-view">
-  <a href="/admin.html" class="back">← Admin</a>
+  <a id="back-link" href="/admin.html" class="back">← Admin</a>
   <h1>Statistiques en direct</h1>
+
+  <!-- Event selector (masqué si un seul événement) -->
+  <div class="card" id="event-card" style="display:none">
+    <h2>Événement</h2>
+    <select id="event-sel" onchange="switchEvent(this.value)" style="margin-bottom:0"></select>
+  </div>
 
   <div class="live-badge"><div class="live-dot"></div> LIVE</div>
 
   <div class="stat-grid">
-    <div class="stat-tile">
-      <div class="stat-val" id="s-count" style="color:var(--accent)">–</div>
-      <div class="stat-lbl">Présents</div>
-    </div>
-    <div class="stat-tile">
-      <div class="stat-val" id="s-peak" style="color:var(--warn)">–</div>
-      <div class="stat-lbl">Pic</div>
-    </div>
-    <div class="stat-tile">
-      <div class="stat-val" id="s-in" style="color:var(--ok)">–</div>
-      <div class="stat-lbl">Entrées</div>
-    </div>
-    <div class="stat-tile">
-      <div class="stat-val" id="s-cap" style="color:var(--muted)">–</div>
-      <div class="stat-lbl">Capacité</div>
-    </div>
+    <div class="stat-tile"><div class="stat-val" id="s-count" style="color:var(--accent)">–</div><div class="stat-lbl">Présents</div></div>
+    <div class="stat-tile"><div class="stat-val" id="s-peak"  style="color:var(--warn)">–</div><div class="stat-lbl">Pic</div></div>
+    <div class="stat-tile"><div class="stat-val" id="s-in"    style="color:var(--ok)">–</div><div class="stat-lbl">Entrées</div></div>
+    <div class="stat-tile"><div class="stat-val" id="s-cap"   style="color:var(--muted)">–</div><div class="stat-lbl">Capacité</div></div>
   </div>
 
+  <!-- History chart -->
   <div class="card">
-    <h2>Évolution</h2>
-    <div class="chart-wrap">
-      <canvas id="chart"></canvas>
-    </div>
+    <h2>Évolution du total</h2>
+    <div class="chart-wrap"><canvas id="chart"></canvas></div>
+  </div>
+
+  <!-- Group breakdown -->
+  <div class="card" id="grp-card" style="display:none">
+    <h2>Par groupe</h2>
+    <table class="grp-table">
+      <tbody id="grp-body"></tbody>
+      <tfoot id="grp-foot"></tfoot>
+    </table>
+  </div>
+
+  <!-- Per-operator -->
+  <div class="card" id="op-card" style="display:none">
+    <h2>Par opérateur</h2>
+    <div id="op-list"></div>
   </div>
 </div>
 
@@ -179,12 +144,15 @@ let chart = null;
 let peak = 0;
 let totalIn = 0;
 let capacity = 100;
+let currentEvent = '';
+let statsWs = null;
+let events = [];
 
-function fmt(ts) {
-  return new Date(ts).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-function fetchWithTimeout(url, opts, ms = 6000) {
+function fetchT(url, opts, ms = 6000) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), ms);
   return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(t));
@@ -196,7 +164,8 @@ async function loadStats() {
   const code = document.getElementById('code').value.trim();
   if (!code) return;
 
-  const res = await fetchWithTimeout(`/api/history?code=${encodeURIComponent(code)}`);
+  // Vérifie le code admin via /api/events
+  const res = await fetchT(`/api/events?code=${encodeURIComponent(code)}`);
   if (!res.ok) {
     const el = document.getElementById('err');
     el.textContent = 'Code incorrect';
@@ -207,141 +176,234 @@ async function loadStats() {
 
   adminCode = code;
   const data = await res.json();
+  events = data.events || [];
 
   document.getElementById('login-view').style.display = 'none';
   document.getElementById('stats-view').style.display = 'block';
 
-  capacity = data.capacity;
-  totalIn  = data.totalIn ?? 0;
-  peak     = data.history.length ? Math.max(...data.history.map(h => h.c), data.count) : data.count;
+  // Pré-sélection via ?e=<id> dans l'URL
+  const urlE = new URLSearchParams(location.search).get('e');
+  currentEvent = events.find(e => e.id === urlE) ? urlE : (events[0]?.id || '');
 
-  document.getElementById('s-cap').textContent = capacity;
-  document.getElementById('s-in').textContent  = totalIn;
-  updateCountDisplay(data.count);
-  buildChart(data.history, data.count, capacity);
-  connectWS();
+  if (events.length > 1) {
+    const sel = document.getElementById('event-sel');
+    sel.innerHTML = events.map(e =>
+      `<option value="${esc(e.id)}" ${e.id === currentEvent ? 'selected' : ''}>${esc(e.name)}</option>`
+    ).join('');
+    document.getElementById('event-card').style.display = '';
+  }
+
+  if (currentEvent) await loadEventStats(currentEvent);
 }
 
 document.getElementById('code').addEventListener('keydown', e => {
   if (e.key === 'Enter') loadStats();
 });
 
+// ── Switch event ──
+
+async function switchEvent(id) {
+  currentEvent = id;
+  if (statsWs) { statsWs.close(); statsWs = null; }
+  if (chart) { chart.destroy(); chart = null; }
+  peak = 0; totalIn = 0;
+  document.getElementById('s-peak').textContent = '–';
+  document.getElementById('s-in').textContent   = '–';
+  document.getElementById('s-count').textContent = '–';
+  // Update back link for admin
+  document.getElementById('back-link').href = `/admin.html`;
+  await loadEventStats(id);
+}
+
+// ── Load stats for an event ──
+
+async function loadEventStats(eventId) {
+  const data = await fetchT(`/api/history?code=${adminCode}&e=${eventId}`).then(r => r.json());
+
+  capacity = data.capacity;
+  totalIn  = data.totalIn ?? 0;
+  peak     = data.history.length ? Math.max(...data.history.map(h => h.c), data.total) : data.total;
+
+  document.getElementById('s-cap').textContent  = capacity;
+  document.getElementById('s-in').textContent   = totalIn;
+  document.getElementById('s-peak').textContent = peak;
+  updateCount(data.total);
+
+  if (chart) { chart.destroy(); chart = null; }
+  buildChart(data.history, data.total, capacity);
+
+  renderGroups(data.groups || []);
+  renderOpStats(data.groups || []);
+
+  connectWS(eventId);
+}
+
 // ── Display ──
 
-function updateCountDisplay(count) {
-  document.getElementById('s-count').textContent = count;
-  if (count > peak) {
-    peak = count;
-    document.getElementById('s-peak').textContent = peak;
-  } else if (document.getElementById('s-peak').textContent === '–') {
+function updateCount(total) {
+  document.getElementById('s-count').textContent = total;
+  if (total > peak) {
+    peak = total;
     document.getElementById('s-peak').textContent = peak;
   }
+}
+
+function renderGroups(groups) {
+  const card = document.getElementById('grp-card');
+  if (groups.length <= 1) { card.style.display = 'none'; return; }
+  card.style.display = '';
+
+  const totalCount = groups.reduce((s, g) => s + g.count, 0);
+  const totalInAll = groups.reduce((s, g) => s + g.totalIn, 0);
+  const totalOutAll = groups.reduce((s, g) => s + g.totalOut, 0);
+
+  document.getElementById('grp-body').innerHTML = groups.map(g =>
+    `<tr>
+      <td class="g-name">${esc(g.name)}</td>
+      <td class="g-val" style="color:var(--accent)">${g.count}</td>
+      <td class="g-val" style="color:var(--ok)">+${g.totalIn}</td>
+      <td class="g-val" style="color:var(--danger)">−${g.totalOut}</td>
+    </tr>`
+  ).join('');
+
+  document.getElementById('grp-foot').innerHTML =
+    `<tr>
+      <td class="g-name">Total</td>
+      <td class="g-val" style="color:var(--accent)">${totalCount}</td>
+      <td class="g-val" style="color:var(--ok)">+${totalInAll}</td>
+      <td class="g-val" style="color:var(--danger)">−${totalOutAll}</td>
+    </tr>`;
+}
+
+function renderOpStats(groups) {
+  // Combine opStats across all groups
+  const combined = {};
+  const opGroup = {}; // name → group name (last seen)
+  for (const g of groups) {
+    for (const [name, s] of Object.entries(g.opStats || {})) {
+      if (!combined[name]) combined[name] = { in: 0, out: 0 };
+      combined[name].in  += s.in;
+      combined[name].out += s.out;
+      opGroup[name] = g.name;
+    }
+  }
+  const entries = Object.entries(combined)
+    .filter(([, s]) => s.in > 0 || s.out > 0)
+    .sort((a, b) => b[1].in - a[1].in);
+
+  const card = document.getElementById('op-card');
+  if (entries.length === 0) { card.style.display = 'none'; return; }
+  card.style.display = '';
+
+  document.getElementById('op-list').innerHTML = entries.map(([name, s]) =>
+    `<div class="op-row">
+      <span class="op-name">${esc(name)}<span class="op-grp"> · ${esc(opGroup[name] || '')}</span></span>
+      <span class="op-in">+${s.in}</span>
+      <span class="op-out">−${s.out}</span>
+      <span class="op-net">${s.in - s.out} net</span>
+    </div>`
+  ).join('');
 }
 
 // ── Chart ──
 
-function buildChart(history, currentCount, cap) {
-  const labels = history.map(h => fmt(h.t));
-  const values = history.map(h => h.c);
+function isLight() { return window.matchMedia('(prefers-color-scheme: light)').matches; }
+function chartPalette() {
+  return isLight()
+    ? { tick:'#64748b', gridX:'#f1f5f9', gridY:'#e2e8f0', tooltipBg:'#ffffff', tooltipBorder:'#e2e8f0', tooltipTitle:'#0f172a', tooltipBody:'#64748b', legend:'#64748b' }
+    : { tick:'#64748b', gridX:'#1e293b', gridY:'#334155', tooltipBg:'#1e293b', tooltipBorder:'#334155', tooltipTitle:'#f8fafc', tooltipBody:'#94a3b8', legend:'#94a3b8' };
+}
 
-  // Add current point
-  labels.push(fmt(Date.now()));
-  values.push(currentCount);
+function fmt(ts) {
+  return new Date(ts).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+}
 
-  const ctx = document.getElementById('chart').getContext('2d');
+function buildChart(history, currentTotal, cap) {
+  const labels = [...history.map(h => fmt(h.t)), fmt(Date.now())];
+  const values = [...history.map(h => h.c), currentTotal];
+  const p = chartPalette();
 
-  chart = new Chart(ctx, {
+  chart = new Chart(document.getElementById('chart').getContext('2d'), {
     type: 'line',
     data: {
       labels,
       datasets: [
-        {
-          label: 'Présents',
-          data: values,
-          borderColor: '#3b82f6',
-          backgroundColor: 'rgba(59,130,246,0.08)',
-          fill: true,
-          tension: 0.3,
-          pointRadius: 0,
-          pointHoverRadius: 4,
-          borderWidth: 2.5,
-        },
-        {
-          label: 'Capacité',
-          data: Array(labels.length).fill(cap),
-          borderColor: 'rgba(239,68,68,0.55)',
-          borderDash: [6, 4],
-          borderWidth: 1.5,
-          pointRadius: 0,
-          fill: false,
-        },
+        { label:'Présents', data:values, borderColor:'#3b82f6', backgroundColor:'rgba(59,130,246,0.08)', fill:true, tension:0.3, pointRadius:0, pointHoverRadius:4, borderWidth:2.5 },
+        { label:'Capacité', data:Array(labels.length).fill(cap), borderColor:'rgba(239,68,68,0.55)', borderDash:[6,4], borderWidth:1.5, pointRadius:0, fill:false },
       ],
     },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
-      interaction: { mode: 'index', intersect: false },
-      plugins: {
-        legend: {
-          labels: { color: '#94a3b8', boxWidth: 12, font: { size: 12 } },
-        },
-        tooltip: {
-          backgroundColor: '#1e293b',
-          borderColor: '#334155',
-          borderWidth: 1,
-          titleColor: '#f8fafc',
-          bodyColor: '#94a3b8',
-        },
+      responsive:true, maintainAspectRatio:false, animation:false,
+      interaction:{ mode:'index', intersect:false },
+      plugins:{
+        legend:{ labels:{ color:p.legend, boxWidth:12, font:{size:12} } },
+        tooltip:{ backgroundColor:p.tooltipBg, borderColor:p.tooltipBorder, borderWidth:1, titleColor:p.tooltipTitle, bodyColor:p.tooltipBody },
       },
-      scales: {
-        x: {
-          ticks: { color: '#64748b', maxTicksLimit: 7, font: { size: 11 } },
-          grid:  { color: '#1e293b' },
-        },
-        y: {
-          beginAtZero: true,
-          ticks: { color: '#64748b', font: { size: 11 } },
-          grid:  { color: '#334155' },
-        },
+      scales:{
+        x:{ ticks:{ color:p.tick, maxTicksLimit:7, font:{size:11} }, grid:{ color:p.gridX } },
+        y:{ beginAtZero:true, ticks:{ color:p.tick, font:{size:11} }, grid:{ color:p.gridY } },
       },
     },
   });
+
+  window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
+    if (!chart) return;
+    const np = chartPalette();
+    chart.options.plugins.legend.labels.color = np.legend;
+    chart.options.plugins.tooltip.backgroundColor = np.tooltipBg;
+    chart.options.plugins.tooltip.borderColor = np.tooltipBorder;
+    chart.options.plugins.tooltip.titleColor = np.tooltipTitle;
+    chart.options.plugins.tooltip.bodyColor = np.tooltipBody;
+    chart.options.scales.x.ticks.color = np.tick;
+    chart.options.scales.x.grid.color  = np.gridX;
+    chart.options.scales.y.ticks.color = np.tick;
+    chart.options.scales.y.grid.color  = np.gridY;
+    chart.update('none');
+  });
 }
 
-function pushPoint(count) {
+function pushPoint(total) {
   if (!chart) return;
-  const MAX_POINTS = 300;
+  const MAX = 300;
   const ds = chart.data;
   ds.labels.push(fmt(Date.now()));
-  ds.datasets[0].data.push(count);
-  // Extend capacity line
+  ds.datasets[0].data.push(total);
   ds.datasets[1].data.push(capacity);
-  if (ds.labels.length > MAX_POINTS) {
-    ds.labels.shift();
-    ds.datasets[0].data.shift();
-    ds.datasets[1].data.shift();
-  }
+  if (ds.labels.length > MAX) { ds.labels.shift(); ds.datasets[0].data.shift(); ds.datasets[1].data.shift(); }
   chart.update('none');
 }
 
-// ── WebSocket ──
+// ── WebSocket (admin connection — no group) ──
 
-function connectWS() {
+function connectWS(eventId) {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const ws = new WebSocket(`${proto}//${location.host}`);
+  const myWs = new WebSocket(`${proto}//${location.host}?e=${encodeURIComponent(eventId)}`);
+  statsWs = myWs;
 
-  ws.onmessage = ({ data }) => {
+  myWs.onmessage = ({ data }) => {
+    if (statsWs !== myWs) return;
     const msg = JSON.parse(data);
     if (msg.type === 'update') {
-      updateCountDisplay(msg.count);
+      updateCount(msg.total);
       totalIn += (msg.delta > 0 ? msg.delta : 0);
       document.getElementById('s-in').textContent = totalIn;
-      pushPoint(msg.count);
+      pushPoint(msg.total);
     }
-    if (msg.type === 'config') {
+    if (msg.type === 'update' && msg.groups) {
+      // Refresh group table counts from WS
+      const tbody = document.getElementById('grp-body');
+      if (tbody.children.length > 0) {
+        // Partial update: just update counts in existing rows
+        msg.groups.forEach((g, i) => {
+          const row = tbody.children[i];
+          if (row) row.children[1].textContent = g.count;
+        });
+        const foot = document.getElementById('grp-foot');
+        if (foot.children[0]) foot.children[0].children[1].textContent = msg.total;
+      }
+    }
+    if (msg.type === 'update' && msg.capacity !== undefined) {
       capacity = msg.capacity;
-      if (msg.count != null) updateCountDisplay(msg.count);
       document.getElementById('s-cap').textContent = capacity;
       if (chart) {
         chart.data.datasets[1].data = Array(chart.data.labels.length).fill(capacity);
@@ -350,8 +412,12 @@ function connectWS() {
     }
   };
 
-  ws.onclose = () => setTimeout(connectWS, 2000);
-  ws.onerror  = () => ws.close();
+  myWs.onclose = () => {
+    if (statsWs !== myWs) return;
+    statsWs = null;
+    setTimeout(() => { if (currentEvent === eventId) connectWS(eventId); }, 2000);
+  };
+  myWs.onerror = () => myWs.close();
 }
 </script>
 </body>
