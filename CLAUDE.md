@@ -149,9 +149,10 @@ Le client opérateur extrait son propre groupe via `groups.find(g => g.id === GR
 - Évite la tempête de reconnexions simultanées après un redémarrage serveur.
 
 ### T3 Rate limiting sur `/api/count` (Workers)
-- Limiter à ~20 opérations/s par IP sur le Worker CF pour éviter le flood accidentel.
-- Utiliser un simple compteur en mémoire DO (`Map<ip, {count, windowStart}>`) avec fenêtre glissante de 1s.
-- Retourner HTTP 429 avec `Retry-After: 1` ; le client peut afficher une alerte discrète.
+- Éviter le flood accidentel sans bloquer le flush de file d'attente (reconnexion après coupure = burst légitime de ~100 ops).
+- Utiliser un **token bucket** par IP en mémoire DO : `capacity=200, refillRate=20/s`. Un opérateur qui reconnecte vide son queue d'un coup (≤200 ops) ; un flood soutenu est plafonné à 20/s.
+- Structure : `Map<ip, {tokens, lastRefill}>` — recalcul lazy à chaque requête.
+- Retourner HTTP 429 avec `Retry-After: 1` ; le client ré-enqueue sans perte.
 
 ### B1 "Adresses Réseau" toujours indiquée
 
