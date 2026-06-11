@@ -119,6 +119,40 @@ Le client opérateur extrait son propre groupe via `groups.find(g => g.id === GR
 ### U11 adapter le manifest.json
 - Pour avoir une app "admin" logo +1 en rouge et une app "cliqueur" logo +1 en bleu
 
+### U12 Export CSV de l'historique (stats.html)
+- Ajouter un bouton "Exporter CSV" sur `stats.html` qui télécharge les données de `GET /api/history` (colonnes : horodatage, total).
+- Inclure une colonne par groupe si des groupes existent.
+- Pas de dépendance externe — `Blob` + `URL.createObjectURL` suffit.
+
+### U13 Confirmation avant changement de code admin
+- Sur `admin.html`, afficher un `<dialog>` modal (pas `window.confirm`) avant de valider un nouveau code admin.
+- Le modal montre l'ancien code masqué et demande confirmation explicite ("Confirmer le nouveau code : …").
+
+### U14 Indicateur de synchronisation de la file d'attente
+- Sur `index.html`, afficher une icône animée (spinner CSS) sur le badge de file d'attente pendant le flush vers le serveur.
+- Disparaît une fois la file vide et la connexion rétablie.
+- Renforce la confiance de l'opérateur sur les réseaux instables.
+
+### U15 Gestion des événements archivés (admin)
+- Sur `admin.html`, section repliable "Événements archivés" listant les événements avec `archived: true`.
+- Actions disponibles : désarchiver, supprimer définitivement (avec confirmation `<dialog>`).
+- API existante `POST /api/admin/config {archived: false}` suffit pour désarchiver.
+
+### T1 Cache QR code côté EventDO
+- `GET /api/qr` régénère le SVG à chaque requête — coûteux.
+- Stocker le résultat dans une propriété en mémoire de l'EventDO (`this._qrCache = {url, svg}`), invalidée uniquement si l'URL change (événement/groupe renommé).
+- Réduction de latence sur admin avec QR affiché en permanence.
+
+### T2 Backoff exponentiel WS (toutes les pages)
+- Les 3 pages (`index.html`, `admin.html`, `stats.html`) reconnectent le WebSocket toutes les 2s fixes.
+- Remplacer par un backoff exponentiel : 1s → 2s → 4s → 8s → max 30s, reset à 0 sur succès.
+- Évite la tempête de reconnexions simultanées après un redémarrage serveur.
+
+### T3 Rate limiting sur `/api/count` (Workers)
+- Limiter à ~20 opérations/s par IP sur le Worker CF pour éviter le flood accidentel.
+- Utiliser un simple compteur en mémoire DO (`Map<ip, {count, windowStart}>`) avec fenêtre glissante de 1s.
+- Retourner HTTP 429 avec `Retry-After: 1` ; le client peut afficher une alerte discrète.
+
 ### B1 "Adresses Réseau" toujours indiquée
 
 ### B2: fond des boutons secondaire restent en foncé alors que le thème est clair
