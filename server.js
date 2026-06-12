@@ -444,6 +444,7 @@ wss.on('connection', (ws, req) => {
   ws.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw);
+      if (msg.type === 'ping') { ws.send(JSON.stringify({ type: 'pong' })); return; }
       if (msg.type === 'hello' && typeof msg.name === 'string') {
         const name = msg.name.trim().slice(0, 32);
         if (!name) return;

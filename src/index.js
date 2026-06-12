@@ -11,11 +11,11 @@ function hexId() {
   return [...b].map(x => x.toString(16).padStart(2, '0')).join('');
 }
 
-function iReq(path, method = 'GET', body = null) {
-  const opts = { method };
+function iReq(path, method = 'GET', body = null, headers = null) {
+  const opts = { method, headers: { ...(headers ?? {}) } };
   if (body !== null) {
-    opts.body    = JSON.stringify(body);
-    opts.headers = { 'Content-Type': 'application/json' };
+    opts.body = JSON.stringify(body);
+    opts.headers['Content-Type'] = 'application/json';
   }
   return new Request(`http://do${path}`, opts);
 }
@@ -80,7 +80,9 @@ async function handleAPI(request, env, url, path) {
   if (path === '/api/count' && method === 'POST') {
     const { e, g } = body ?? {};
     if (!e || !g) return Response.json({ error: 'e and g required' }, { status: 400 });
-    return eventStub(env, e).fetch(iReq('/count', 'POST', body));
+    // N2: transmettre l'IP réelle au DO — sinon le token bucket voit 'unknown' pour tous
+    const ip = request.headers.get('cf-connecting-ip') ?? 'unknown';
+    return eventStub(env, e).fetch(iReq('/count', 'POST', body, { 'cf-connecting-ip': ip }));
   }
 
   if (path === '/api/state' && method === 'GET') {
@@ -168,8 +170,15 @@ async function handleAPI(request, env, url, path) {
     }
 
     if (e && deleteEvent === true) {
-      // B5: ferme les WS actifs avant de retirer l'event du registre
-      try { await eventStub(env, e).fetch(iReq('/terminate', 'POST')); } catch {}
+      // N4: purge le DO (WS fermés + storage effacé) AVANT le retrait du registre.
+      // Échec de purge → on garde l'entrée registre pour que l'admin puisse réessayer
+      // (terminate est idempotent).
+      try {
+        const r = await eventStub(env, e).fetch(iReq('/terminate', 'POST'));
+        if (!r.ok) throw new Error('terminate failed');
+      } catch {
+        return Response.json({ error: 'delete failed' }, { status: 502 });
+      }
       await registryStub(env).fetch(iReq('/events/delete', 'POST', { id: e }));
       return Response.json({ ok: true });
     }

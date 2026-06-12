@@ -468,6 +468,20 @@ describe('WebSocket', () => {
     ws.on('error', done);
   });
 
+  test('ping → réponse pong (heartbeat anti-zombie N1)', (_t, done) => {
+    const ws = new WebSocket(wsUrl());
+    ws.once('message', () => {
+      ws.once('message', (data) => {
+        const msg = JSON.parse(data);
+        assert.equal(msg.type, 'pong');
+        ws.close();
+        done();
+      });
+      ws.send(JSON.stringify({ type: 'ping' }));
+    });
+    ws.on('error', done);
+  });
+
   test('hello avec nom → broadcast type:clients avec le nom', (_t, done) => {
     const ws = new WebSocket(wsUrl());
     ws.once('message', () => {

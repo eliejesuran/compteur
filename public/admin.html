@@ -496,9 +496,16 @@ function wsReconnectNow() {
 }
 
 function startWS(eventId) {
-  if (ws && ws.readyState <= 1) return; // déjà en cours
+  if (ws) {
+    // Déjà connecté à CET event → rien à faire ; autre event → fermer proprement
+    if (ws._eventId === eventId && ws.readyState <= 1) return;
+    const old = ws; ws = null;
+    old.onopen = old.onmessage = old.onerror = old.onclose = null;
+    try { old.close(); } catch {}
+  }
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const myWs = new WebSocket(`${proto}//${location.host}?e=${encodeURIComponent(eventId)}`);
+  myWs._eventId = eventId;
   ws = myWs;
   let pingTimer = null;
   let lastMsg = Date.now();
@@ -780,16 +787,22 @@ function confirmDeleteEvent(id, name) {
 async function deleteArchivedEvent() {
   document.getElementById('delete-confirm-dialog').close();
   const id = document.getElementById('delete-confirm-id').value;
-  const res = await fetchT('/api/admin/config', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code: adminCode, e: id, deleteEvent: true }),
-  }).then(r => r.json());
-  if (res.ok) {
-    archivedEvents = archivedEvents.filter(e => e.id !== id);
-    document.getElementById('archived-count').textContent = archivedEvents.length;
-    if (!archivedEvents.length) document.getElementById('card-archived').style.display = 'none';
-    else renderArchived();
+  try {
+    const res = await fetchT('/api/admin/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: adminCode, e: id, deleteEvent: true }),
+    }).then(r => r.json());
+    if (res.ok) {
+      archivedEvents = archivedEvents.filter(e => e.id !== id);
+      document.getElementById('archived-count').textContent = archivedEvents.length;
+      if (!archivedEvents.length) document.getElementById('card-archived').style.display = 'none';
+      else renderArchived();
+    } else {
+      alert('Échec de la suppression — réessayez.');
+    }
+  } catch {
+    alert('Échec de la suppression — réessayez.');
   }
 }
 

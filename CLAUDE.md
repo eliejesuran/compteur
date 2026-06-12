@@ -46,6 +46,8 @@ Backoff reconnexion : 1s→2s→4s→…→30s, reset sur succès ou switch even
 | s→c | `update` | total, delta, alert, capacity, groups:[{id,name,count}] |
 | s→c | `clients` | clients:[{name,groupName}] |
 | c→s | `hello` | name — envoyé après chaque onopen |
+| c→s | `ping` | — toutes les 20s (keepalive + heartbeat) |
+| s→c | `pong` | — réponse immédiate (server.js ET event.js) |
 
 ## Invariants critiques
 - **State** : `{adminCode, permCode, events:{[id]:{capacity,history,groups:{[id]:GroupState}}}}`. Groupe "Principal" auto-créé. Dernier groupe non supprimable. Event archivé → 404.
@@ -120,6 +122,53 @@ Backoff reconnexion : 1s→2s→4s→…→30s, reset sur succès ou switch even
 | L1 | Aucune limite sur le nombre de groupes par event ni d'events au total — un admin peut saturer la mémoire/storage. |
 | L2 | `opStats` non borné en nombre d'entrées — noms d'opérateurs illimités par groupe. |
 | L3 | Token bucket CF : burst initial de 2 000 requêtes par IP — un attaquant connaissant un event ID peut injecter 2 000 faux comptes en une salve. |
+
+## Revue 2026-06-12 — bugs
+
+### ⛔ Critiques
+
+| ID | Fichier | Description |
+|---|---|---|
+| N1 | `server.js` | ✅ **CORRIGÉ** — le serveur local ne répondait pas aux `ping` WS → le heartbeat client (close si silence >60s) faisait boucler déco/reco toutes les 60s sur un event calme. Régression du heartbeat 12/06. Handler `ping`→`pong` ajouté + test. |
+| N2 | `src/index.js` | ✅ **CORRIGÉ** — `iReq()` ne transmettait pas `cf-connecting-ip` au EventDO → `_rl_check` voyait `'unknown'` pour TOUTES les requêtes : rate-limit par IP inopérant, bucket unique partagé. Un attaquant connaissant l'event ID pouvait l'épuiser en continu → 429 pour tous les opérateurs → comptage paralysé. `iReq` accepte un 4ᵉ param `headers` ; `/api/count` transmet l'IP. |
+| N3 | `public/admin.html` | ✅ **CORRIGÉ** — régression 12/06 : le garde anti-double-connexion de `startWS` (`if (ws && readyState<=1) return`) bloquait le **switch d'événement** (ancien WS encore ouvert → return → admin abonné au mauvais event, plus aucun live). Tag `ws._eventId` : même event → noop, autre event → fermeture propre (handlers neutralisés) puis reconnexion. |
+| N4 | `src/event.js` + `src/index.js` | ✅ **CORRIGÉ** — event supprimé = fantôme côté CF : le storage du DO n'était jamais purgé → `/api/count`, `/api/state`, WS et résurrection (`archived:false`) fonctionnaient toujours sur un event « supprimé ». Pire : `/terminate` était placé APRÈS le garde `archived → 404`, donc inopérant pour le flux normal (archive → delete). Fix : `/terminate` déplacé AVANT le garde ; `storage.deleteAll()` + `deleteAlarm()` + reset mémoire complet ; `index.js` n'efface l'entrée registre que si la purge a réussi (502 sinon → retry, terminate idempotent) ; garde `webSocketMessage` : message reçu sur un event supprimé → close 4004 au lieu de pong (un zombie ne survit pas au heartbeat). Vérifié sous `wrangler dev` : state/count/WS/résurrection → 404 après delete (flux live ET archivé). Artefact connu : en dev local la trame close 4004 part (client passe en CLOSING) mais le teardown TCP ne se propage pas — OK en prod. |
+
+### 🐛 Bugs fonctionnels
+
+| ID | Fichier | Description |
+|---|---|---|
+| N5 | `server.js` + `src/event.js` | **Archivage ne ferme pas les WS ouverts** — l'opérateur garde son dot vert et continue de taper ; `/api/count` → 404 → la queue jette les ops (4xx) **silencieusement**. Perte de comptage sans aucun signal. Fix : fermer les WS en 4004 quand `archived === true`. |
+| N6 | `public/index.html` | **`crypto.randomUUID()` exige un contexte sécurisé** — en LAN local (`http://192.168.x.x:3000`, mode fallback sans internet), `tap()` lève TypeError → **aucun comptage possible**. Jamais vu car tunnel/CF = https. Fix : fallback `Date.now()+Math.random()` si `randomUUID` absent. |
+| N7 | `public/admin.html` | **`esc()` n'échappe ni `'` ni `"`** — un nom de groupe/événement contenant une apostrophe (ex. « L'entrée ») casse les `onclick` générés (`renameGroup('id','L'entrée')` = SyntaxError) → boutons ✎/×/Supprimer inopérants. Injection JS possible (admin-only). Fix : échapper `'`→`&#39;` `"`→`&quot;` dans `esc()`. |
+
+### ⚠️ Limites
+
+| ID | Description |
+|---|---|
+| N8 | `webSocketMessage` (event.js) sans rate-limit : spam `hello` = amplification `_broadcastClients` vers tous les clients. Borner (ex. 1 hello/s/WS). |
+| N9 | `server.js` n'envoie jamais de ping serveur→client : les sockets TCP morts restent dans `wsClients` jusqu'au timeout OS (fuite lente + faux « connectés » au-delà de la grâce 30s). |
+| N10 | Fan-out `/api/events` (index.js) sans timeout par DO : un seul DO lent bloque toute la liste admin (le client coupe à 6s). `AbortSignal.timeout(3000)` par stub. |
+
+## Renforcement sécurité (proposé)
+
+| ID | Description | Approche |
+|---|---|---|
+| S1 | Code admin en query param GET (logs, historique, Referer) | Header `Authorization: Bearer <code>` partout ; garder le query param en fallback compat |
+| S2 | Pas de SRI sur les CDN — jsQR (index), SheetJS (admin), **Chart.js (stats)** | `integrity="sha384-…" crossorigin="anonymous"` sur les 3 |
+| S5 | Pas de vérification `Origin` sur les upgrades WS (CSWSH) — un site tiers ouvert par l'admin peut lire totaux + prénoms si event ID connu | Refuser l'upgrade si `Origin` présent ≠ host attendu (server.js + index.js) |
+| S6 | `/api/qr` local construit l'URL depuis le header `Host` non validé | Liste blanche : IPs locales + localhost (faible — admin auth requis) |
+| S7 | Event ID 6 hex brute-forçable (S4) + `/api/state` non authentifié | Passer à 8-10 hex à la création ; optionnel : rate-limit `/api/state` |
+
+## Robustesse (proposé)
+
+| ID | Description | Approche |
+|---|---|---|
+| R1 | `flush()` ignore `Retry-After` sur 429 → la boucle 2s aggrave un rate-limit | Backoff : sur 429, suspendre flush `Retry-After` secondes |
+| R2 | Queue localStorage non plafonnée (opérateur hors ligne des heures) | Plafond 5 000 ops + bandeau UI « synchronisation requise » |
+| R3 | `/api/qr` Express : async sans try/catch → rejet non géré si QRCode échoue | try/catch → 500 JSON propre |
+| R4 | L1/L2 : limites manquantes events/groupes/opStats | Caps : 50 events, 20 groupes/event, 100 opérateurs/groupe |
+| R5 | Pas de test automatisé du Worker CF (event.js/index.js/registry.js non couverts) | Vitest + `@cloudflare/vitest-pool-workers` ou tests d'intégration `wrangler dev` |
 
 ## Dev
 ```bash

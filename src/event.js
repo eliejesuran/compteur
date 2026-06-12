@@ -158,6 +158,25 @@ export class EventDO extends DurableObject {
       });
     }
 
+    // POST /terminate — ferme les WS et purge tout le storage (N4 : pas d'event fantôme).
+    // AVANT le garde 404 : le flux normal supprime des events déjà archivés,
+    // et l'ancien emplacement (après le garde) rendait terminate inopérant pour eux.
+    if (path === '/terminate' && request.method === 'POST') {
+      const sockets = this.ctx.getWebSockets();
+      console.log(`[terminate] ${this._s?.id ?? '?'} — fermeture de ${sockets.length} WS`);
+      for (const ws of sockets) {
+        try { ws.close(4004, 'Event deleted'); } catch (err) { console.log('[terminate] close err:', err.message); }
+      }
+      await this.ctx.storage.deleteAlarm();
+      await this.ctx.storage.deleteAll();
+      this._s = null;
+      this._seen = new Set();
+      this._recentlyDisc.clear();
+      this._rl.clear();
+      this._qrCache = null;
+      return Response.json({ ok: true });
+    }
+
     if (!this._s || this._s.archived) {
       return Response.json({ error: 'event not found' }, { status: 404 });
     }
@@ -281,14 +300,6 @@ export class EventDO extends DurableObject {
       return Response.json({ ok: true });
     }
 
-    // POST /terminate — ferme tous les WS actifs (appelé avant deleteEvent)
-    if (path === '/terminate' && request.method === 'POST') {
-      for (const ws of this.ctx.getWebSockets()) {
-        try { ws.close(4004, 'Event deleted'); } catch {}
-      }
-      return Response.json({ ok: true });
-    }
-
     // GET /clients
     if (path === '/clients' && request.method === 'GET') {
       const now = Date.now();
@@ -380,6 +391,10 @@ export class EventDO extends DurableObject {
 
   async webSocketMessage(ws, message) {
     try {
+      await this._load();
+      // N4: socket survivant d'un event supprimé — ne plus répondre (sinon le
+      // pong satisfait le heartbeat client et le zombie ne meurt jamais)
+      if (!this._s) { try { ws.close(4004, 'Event deleted'); } catch {} return; }
       const msg = JSON.parse(message);
       if (msg.type === 'ping') { ws.send(JSON.stringify({ type: 'pong' })); return; }
       if (msg.type === 'hello' && typeof msg.name === 'string') {
@@ -388,8 +403,7 @@ export class EventDO extends DurableObject {
         const a = ws.deserializeAttachment() ?? {};
         a.name = name;
         ws.serializeAttachment(a);
-        await this._load();
-        if (this._s) this._broadcastClients();
+        this._broadcastClients();
       }
     } catch {}
   }
