@@ -1,4 +1,12 @@
 import { DurableObject } from 'cloudflare:workers';
+import QRCode from 'qrcode';
+
+async function generateQR(url) {
+  const svg = await QRCode.toString(url, { type: 'svg', width: 400, margin: 2 });
+  const b64 = btoa(encodeURIComponent(svg).replace(/%([0-9A-F]{2})/g,
+    (_, p) => String.fromCharCode(parseInt(p, 16))));
+  return `data:image/svg+xml;base64,${b64}`;
+}
 
 function makeGroup(id, name) {
   return { id, name, count: 0, totalIn: 0, totalOut: 0, opStats: {} };
@@ -13,15 +21,23 @@ function hexId() {
 export class EventDO extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
-    this._s    = null;
-    this._seen = new Set();
-    this._rl   = new Map(); // T3: token-bucket rate limiter — ip → {tokens, lastMs}
+    this._s            = null;
+    this._seen         = new Set();
+    this._rl           = new Map(); // T3: token-bucket rate limiter — ip → {tokens, lastMs}
+    this._recentlyDisc = new Map(); // U4: name → {disconnectedAt, groupId}
+    this._qrCache      = null;      // T1: {url, qr}
   }
 
   // T3: token bucket — capacity=2000, refill=20/s. Returns false if rate limited.
   _rl_check(ip) {
     const CAPACITY = 2000, RATE = 20;
     const now = Date.now();
+    // B4: purge IPs inactives depuis >1h quand la Map dépasse 500 entrées
+    if (this._rl.size > 500) {
+      for (const [k, v] of this._rl) {
+        if (now - v.lastMs > 3_600_000) this._rl.delete(k);
+      }
+    }
     let b = this._rl.get(ip);
     if (!b) { b = { tokens: CAPACITY, lastMs: now }; this._rl.set(ip, b); }
     const elapsed = (now - b.lastMs) / 1000;
@@ -34,11 +50,19 @@ export class EventDO extends DurableObject {
 
   async _load() {
     if (this._s !== null) return;
-    this._s = (await this.ctx.storage.get('state')) ?? null;
+    const [s, seen] = await Promise.all([
+      this.ctx.storage.get('state'),
+      this.ctx.storage.get('seen'),
+    ]);
+    this._s    = s    ?? null;
+    this._seen = new Set(seen ?? []);
   }
 
   async _save() {
-    await this.ctx.storage.put('state', this._s);
+    await Promise.all([
+      this.ctx.storage.put('state', this._s),
+      this.ctx.storage.put('seen', [...this._seen].slice(-2500)),
+    ]);
   }
 
   _total() {
@@ -63,6 +87,12 @@ export class EventDO extends DurableObject {
   }
 
   _broadcastClients() {
+    const now = Date.now();
+    // U4: purge entries > 30s
+    for (const [name, v] of this._recentlyDisc) {
+      if (now - v.disconnectedAt > 30_000) this._recentlyDisc.delete(name);
+    }
+
     const seen = new Set();
     const clients = [];
     for (const ws of this.ctx.getWebSockets()) {
@@ -72,6 +102,15 @@ export class EventDO extends DurableObject {
       clients.push({
         name: a.name,
         groupName: a.groupId ? (this._s.groups[a.groupId]?.name ?? null) : null,
+      });
+    }
+    // U4: recently disconnected (grace period 30s)
+    for (const [name, v] of this._recentlyDisc) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      clients.push({
+        name,
+        groupName: v.groupId ? (this._s?.groups[v.groupId]?.name ?? null) : null,
       });
     }
     const msg = JSON.stringify({ type: 'clients', clients });
@@ -224,7 +263,11 @@ export class EventDO extends DurableObject {
         if (Number.isFinite(capacity) && capacity > 0) this._s.capacity = Math.round(capacity);
         if (typeof name === 'string' && name.trim()) this._s.name = name.trim().slice(0, 40);
         if (archived === true)  this._s.archived = true;
-        if (archived === false) this._s.archived = false;
+        if (archived === false) {
+          const wasArchived = this._s.archived;
+          this._s.archived = false;
+          if (wasArchived) await this.ctx.storage.setAlarm(Date.now() + 30_000);
+        }
         if (reset === true) {
           for (const grp of Object.values(this._s.groups)) {
             grp.count = 0; grp.totalIn = 0; grp.totalOut = 0; grp.opStats = {};
@@ -238,8 +281,17 @@ export class EventDO extends DurableObject {
       return Response.json({ ok: true });
     }
 
+    // POST /terminate — ferme tous les WS actifs (appelé avant deleteEvent)
+    if (path === '/terminate' && request.method === 'POST') {
+      for (const ws of this.ctx.getWebSockets()) {
+        try { ws.close(4004, 'Event deleted'); } catch {}
+      }
+      return Response.json({ ok: true });
+    }
+
     // GET /clients
     if (path === '/clients' && request.method === 'GET') {
+      const now = Date.now();
       const seen = new Set();
       const clients = [];
       for (const ws of this.ctx.getWebSockets()) {
@@ -247,12 +299,36 @@ export class EventDO extends DurableObject {
         if (!a.name || seen.has(a.name)) continue;
         seen.add(a.name);
         clients.push({
-          name:       a.name,
-          groupName:  a.groupId ? (this._s.groups[a.groupId]?.name ?? null) : null,
+          name:        a.name,
+          groupName:   a.groupId ? (this._s.groups[a.groupId]?.name ?? null) : null,
           connectedAt: a.connectedAt,
         });
       }
+      // U4: recently disconnected (grace period 30s)
+      for (const [name, v] of this._recentlyDisc) {
+        if (seen.has(name) || now - v.disconnectedAt > 30_000) continue;
+        seen.add(name);
+        clients.push({
+          name,
+          groupName:   v.groupId ? (this._s.groups[v.groupId]?.name ?? null) : null,
+          connectedAt: null,
+        });
+      }
       return Response.json({ clients });
+    }
+
+    // GET /qr?g=X&url=X — T1: retourne le QR caché ou le génère
+    if (path === '/qr' && request.method === 'GET') {
+      const g      = url.searchParams.get('g');
+      const opUrl  = url.searchParams.get('url');
+      if (!g || !opUrl) return Response.json({ error: 'g and url required' }, { status: 400 });
+      if (!this._s.groups[g]) return Response.json({ error: 'group not found' }, { status: 404 });
+      if (this._qrCache?.url === opUrl) {
+        return Response.json({ qr: this._qrCache.qr, url: opUrl });
+      }
+      const qr = await generateQR(opUrl);
+      this._qrCache = { url: opUrl, qr };
+      return Response.json({ qr, url: opUrl });
     }
 
     return Response.json({ error: 'not found' }, { status: 404 });
@@ -312,13 +388,29 @@ export class EventDO extends DurableObject {
         const a = ws.deserializeAttachment() ?? {};
         a.name = name;
         ws.serializeAttachment(a);
-        this._broadcastClients();
+        await this._load();
+        if (this._s) this._broadcastClients();
       }
     } catch {}
   }
 
-  async webSocketClose(ws)  { this._broadcastClients(); }
-  async webSocketError(ws)  { this._broadcastClients(); }
+  async webSocketClose(ws) {
+    try {
+      const a = ws.deserializeAttachment() ?? {};
+      if (a.name) this._recentlyDisc.set(a.name, { disconnectedAt: Date.now(), groupId: a.groupId ?? null });
+      await this._load();
+      if (this._s) this._broadcastClients();
+    } catch {}
+  }
+
+  async webSocketError(ws) {
+    try {
+      const a = ws.deserializeAttachment() ?? {};
+      if (a.name) this._recentlyDisc.set(a.name, { disconnectedAt: Date.now(), groupId: a.groupId ?? null });
+      await this._load();
+      if (this._s) this._broadcastClients();
+    } catch {}
+  }
 
   // ── Alarme — historique toutes les 30 s ────────────────────────────────────
 

@@ -36,8 +36,9 @@ function checkAuth(code) {
 }
 
 // Runtime-only (not persisted)
-const eventSeenOps = new Map(); // eventId → Set<uuid>
-const wsClients = new Map();    // ws → {name, connectedAt, eventId, groupId}
+const eventSeenOps       = new Map(); // eventId → Set<uuid>
+const wsClients          = new Map(); // ws → {name, connectedAt, eventId, groupId}
+const recentlyDisconnected = new Map(); // U4: `${eventId}:${name}` → {name,groupId,eventId,disconnectedAt}
 
 // --- Helpers ---
 
@@ -85,6 +86,40 @@ function getLocalIPs() {
     .map(i => i.address);
 }
 
+// --- Persistence ---
+
+function buildSnapshot() {
+  return {
+    ...state,
+    seenOps: Object.fromEntries(
+      [...eventSeenOps.entries()].map(([id, s]) => [id, [...s].slice(-5000)])
+    ),
+  };
+}
+
+function applySnapshot(data) {
+  if (!data || !data.events) return;
+  const { seenOps: savedSeenOps, ...rest } = data;
+  Object.assign(state, rest);
+  if (savedSeenOps && typeof savedSeenOps === 'object') {
+    for (const [id, arr] of Object.entries(savedSeenOps)) {
+      if (Array.isArray(arr)) eventSeenOps.set(id, new Set(arr));
+    }
+  }
+}
+
+let _saveTimer = null;
+
+function flushSave() {
+  _saveTimer = null;
+  try { fs.writeFileSync(STATE_FILE, JSON.stringify(buildSnapshot()), 'utf8'); } catch (e) { console.error('[save]', e.message); }
+}
+
+function scheduleSave() {
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(flushSave, 500);
+}
+
 // --- Broadcast ---
 
 function broadcastEvent(eventId, delta) {
@@ -106,13 +141,28 @@ function broadcastEvent(eventId, delta) {
 
 function broadcastClientsForEvent(eventId) {
   const evt = state.events[eventId];
+  const now = Date.now();
   const seen = new Set();
   const clients = [];
+
+  // U4: purge entries > 30s
+  for (const [key, v] of recentlyDisconnected) {
+    if (now - v.disconnectedAt > 30_000) recentlyDisconnected.delete(key);
+  }
+
   for (const c of wsClients.values()) {
     if (c.eventId !== eventId || !c.name || seen.has(c.name)) continue;
     seen.add(c.name);
     clients.push({ name: c.name, groupName: c.groupId ? evt?.groups[c.groupId]?.name ?? null : null });
   }
+
+  // U4: recently disconnected (grace period 30s)
+  for (const v of recentlyDisconnected.values()) {
+    if (v.eventId !== eventId || seen.has(v.name)) continue;
+    seen.add(v.name);
+    clients.push({ name: v.name, groupName: v.groupId ? evt?.groups[v.groupId]?.name ?? null : null });
+  }
+
   const msg = JSON.stringify({ type: 'clients', clients });
   for (const [ws, c] of wsClients) {
     if (c.eventId === eventId && ws.readyState === 1) ws.send(msg);
@@ -161,6 +211,7 @@ app.post('/api/count', (req, res) => {
 
   const total = eventTotal(evt);
   broadcastEvent(e, delta);
+  scheduleSave();
   res.json({ total, alert: total >= evt.capacity });
 });
 
@@ -269,6 +320,11 @@ app.post('/api/admin/config', (req, res) => {
     if (deleteEvent === true) {
       delete state.events[e];
       eventSeenOps.delete(e);
+      // B5: ferme les WS clients connectés à cet event
+      for (const [ws, c] of wsClients) {
+        if (c.eventId === e && ws.readyState < 2) ws.close(4004, 'Event deleted');
+      }
+      scheduleSave();
       return res.json({ ok: true });
     }
     if (g) {
@@ -301,12 +357,13 @@ app.post('/api/admin/config', (req, res) => {
         evt.history = [];
         const ops = eventSeenOps.get(e);
         if (ops) ops.clear();
-        fs.writeFileSync(STATE_FILE, JSON.stringify(state), 'utf8');
+        flushSave();
       }
       broadcastEvent(e, 0);
     }
   }
 
+  scheduleSave(); // B6: persiste les changements de config (capacity, name, code, perm…)
   res.json({ ok: true });
 });
 
@@ -327,12 +384,19 @@ app.get('/api/clients', (req, res) => {
   if (!checkAuth(req.query.code)) return res.status(403).json({ error: 'forbidden' });
   const evt = state.events[req.query.e];
   if (!evt) return res.status(404).json({ error: 'event not found' });
+  const now = Date.now();
   const seen = new Set();
   const clients = [];
   for (const c of wsClients.values()) {
     if (c.eventId !== req.query.e || !c.name || seen.has(c.name)) continue;
     seen.add(c.name);
     clients.push({ name: c.name, groupName: c.groupId ? evt.groups[c.groupId]?.name ?? null : null, connectedAt: c.connectedAt });
+  }
+  // U4: recently disconnected (grace period 30s)
+  for (const v of recentlyDisconnected.values()) {
+    if (v.eventId !== req.query.e || seen.has(v.name) || now - v.disconnectedAt > 30_000) continue;
+    seen.add(v.name);
+    clients.push({ name: v.name, groupName: v.groupId ? evt.groups[v.groupId]?.name ?? null : null, connectedAt: null });
   }
   res.json({ clients });
 });
@@ -399,7 +463,20 @@ wss.on('connection', (ws, req) => {
     wsClients.delete(ws);
     if (client?.name) {
       logClients('déconnecté(e)', client.name, client.eventId, client.groupId);
+      // U4: grâce déco — garde l'op dans la liste pendant 30s
+      const key = `${client.eventId}:${client.name}`;
+      const disconnectedAt = Date.now();
+      recentlyDisconnected.set(key, {
+        name: client.name, groupId: client.groupId, eventId: client.eventId, disconnectedAt,
+      });
       broadcastClientsForEvent(client.eventId);
+      setTimeout(() => {
+        const entry = recentlyDisconnected.get(key);
+        if (entry && entry.disconnectedAt === disconnectedAt) {
+          recentlyDisconnected.delete(key);
+          broadcastClientsForEvent(client.eventId);
+        }
+      }, 30_000);
     }
   });
 
@@ -414,7 +491,7 @@ if (require.main === module) {
     try {
       const saved = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
       if (saved.events) {
-        Object.assign(state, saved);
+        applySnapshot(saved);
         console.log(`État restauré : ${Object.keys(state.events).length} événement(s)`);
       } else {
         console.log('Ancien format ignoré — état réinitialisé.');
@@ -426,8 +503,8 @@ if (require.main === module) {
 
   for (const id of Object.keys(state.events)) ensureSeenOps(id);
 
-  // Persist every 30s
-  setInterval(() => fs.writeFileSync(STATE_FILE, JSON.stringify(state), 'utf8'), 30000);
+  // Sauvegarde de secours toutes les 30s (scheduleSave après chaque count couvre le cas normal)
+  setInterval(flushSave, 30000);
 
   // Record history (total count per event) every 30s
   setInterval(() => {
@@ -452,4 +529,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, server, state, eventSeenOps, trimSeenOps, wsClients, checkAdmin, checkAuth };
+module.exports = { app, server, state, eventSeenOps, trimSeenOps, wsClients, recentlyDisconnected, checkAdmin, checkAuth, buildSnapshot, applySnapshot };

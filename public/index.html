@@ -345,6 +345,21 @@
       touch-action: manipulation;
     }
 
+    /* ── Lien admin discret — U3 ── */
+    #admin-link {
+      position: fixed;
+      bottom: max(14px, env(safe-area-inset-bottom) + 4px);
+      right: 14px;
+      width: 28px; height: 28px;
+      display: flex; align-items: center; justify-content: center;
+      color: var(--muted);
+      opacity: 0.28;
+      text-decoration: none;
+      z-index: 10;
+      touch-action: manipulation;
+    }
+    #admin-link:active { opacity: 0.7; }
+
     /* ── Fond Bruxelles ── */
     #bxl-bg {
       position: fixed; inset: 0; z-index: -1;
@@ -353,12 +368,14 @@
     }
     #bxl-bg pre {
       font-family: 'Courier New', Courier, monospace;
-      font-size: min(calc(99vw / 120), calc(92vh / 70));
+      /* mobile : vw/120 donnait ~3px sur iPhone → on retire la contrainte largeur,
+         l'art déborde horizontalement mais est centré + clippé par overflow:hidden */
+      font-size: min(calc(92vh / 70), 15px);
       line-height: 1.18; white-space: pre; letter-spacing: 0;
-      color: rgba(200, 150, 40, 0.09);
+      color: rgba(200, 150, 40, 0.15);
     }
     @media (prefers-color-scheme: light) {
-      #bxl-bg pre { color: rgba(80, 60, 10, 0.06); }
+      #bxl-bg pre { color: rgba(80, 60, 10, 0.10); }
     }
   </style>
 </head>
@@ -408,6 +425,13 @@
 </div>
 
 <div id="alert-overlay"></div>
+
+<a id="admin-link" href="/admin.html" title="Administration" aria-label="Administration">
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="3"/>
+    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+  </svg>
+</a>
 
 <!-- Overlay prénom — affiché uniquement à la première connexion -->
 <div id="name-overlay">
@@ -584,9 +608,7 @@ async function flush() {
             localStorage.setItem('op_queue', JSON.stringify(queue));
             renderQueueBadge();
           } else {
-            // 5xx — erreur serveur transitoire, réessayer plus tard
-            setOnline(false);
-            break;
+            break; // 5xx transitoire — réessayer plus tard
           }
           continue;
         }
@@ -597,26 +619,53 @@ async function flush() {
         if (!data.dup) setCount(data.total);
         triggerAlert(data.alert);
       } catch {
-        setOnline(false);
-        break;
+        break; // réseau indisponible — réessayer plus tard
       }
     }
   } finally {
     flushing = false;
-    if (queue.length === 0) setOnline(true);
   }
 }
 
+// ── Wake Lock — U1 ─────────────────────────────────────────────────────────
+let _wakeLock = null;
+async function acquireWakeLock() {
+  try {
+    _wakeLock = await navigator.wakeLock.request('screen');
+    _wakeLock.addEventListener('release', () => { _wakeLock = null; }, { once: true });
+  } catch {}
+}
+if (navigator.wakeLock) acquireWakeLock();
+
 window.addEventListener('online', flush);
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && queue.length > 0) flush();
+  if (!document.hidden) {
+    if (queue.length > 0) flush();
+    if (navigator.wakeLock && !_wakeLock) acquireWakeLock();
+    wsReconnectNow();
+  }
 });
 setInterval(() => { if (navigator.onLine && queue.length > 0) flush(); }, 2000);
 
 // ── WebSocket — real-time sync ──────────────────────────────────────
 
 let currentWs = null;
-let _wsDelay = 1000; // T2: backoff exponentiel
+let _wsDelay = 1000;      // T2: backoff exponentiel
+let _wsTimer  = null;     // timer de reconnexion en cours
+
+function wsReconnectNow() {
+  // Annule tout timer en attente
+  if (_wsTimer) { clearTimeout(_wsTimer); _wsTimer = null; }
+  // Tue proprement un éventuel WS zombie (readyState OPEN mais connexion morte)
+  if (currentWs) {
+    const old = currentWs; currentWs = null;
+    old.onopen = old.onmessage = old.onerror = null;
+    old.onclose = null;
+    try { old.close(); } catch {}
+  }
+  _wsDelay = 1000;
+  connect();
+}
 
 function connect() {
   if (!EVENT_ID || !GROUP_ID) {
@@ -624,27 +673,34 @@ function connect() {
     document.getElementById('dot').className = 'offline';
     return;
   }
+  // Empêche les doubles connexions
+  if (currentWs && currentWs.readyState <= 1) return;
 
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const ws = new WebSocket(`${proto}//${location.host}?e=${encodeURIComponent(EVENT_ID)}&g=${encodeURIComponent(GROUP_ID)}`);
   currentWs = ws;
   let pingTimer = null;
+  let lastMsg = Date.now(); // heartbeat — dernière activité serveur
 
   ws.onopen = () => {
-    _wsDelay = 1000; // T2: reset backoff on success
+    _wsDelay = 1000; // T2: reset backoff
     setOnline(true);
     flush();
     if (opName) ws.send(JSON.stringify({ type: 'hello', name: opName }));
     pingTimer = setInterval(() => {
-      if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'ping' }));
-    }, 25_000);
+      if (ws !== currentWs || ws.readyState !== 1) return;
+      // Heartbeat : si aucune activité serveur depuis 60 s, connexion morte
+      if (Date.now() - lastMsg > 60_000) { ws.close(); return; }
+      ws.send(JSON.stringify({ type: 'ping' }));
+    }, 20_000);
   };
 
   ws.onmessage = ({ data }) => {
+    lastMsg = Date.now();
     const msg = JSON.parse(data);
+    if (msg.type === 'pong') return;
     if (msg.type === 'init' || msg.type === 'update') {
       setCount(msg.total, msg.capacity);
-      // Mettre à jour le compteur du groupe de cet opérateur
       if (msg.groups && GROUP_ID) {
         const myGroup = msg.groups.find(g => g.id === GROUP_ID);
         if (myGroup) setGroupCount(myGroup.count, myGroup.name);
@@ -653,20 +709,24 @@ function connect() {
     if (msg.type === 'init' && msg.eventName) {
       document.title = `${msg.eventName} – Compteur`;
     }
-    // msg.type === 'clients' ignoré côté compteur
   };
 
   ws.onclose = (e) => {
     clearInterval(pingTimer);
+    if (ws !== currentWs) return; // WS orphelin — ignorer
     currentWs = null;
     setOnline(false);
     if (e.code === 4004) {
       document.getElementById('status-text').textContent = 'Événement ou groupe introuvable';
       return;
     }
-    const d = _wsDelay;
-    _wsDelay = Math.min(_wsDelay * 2, 30000); // T2: backoff 1→2→4→…→30 s
-    setTimeout(connect, d);
+    if (!document.hidden) {
+      // Page visible : reconnexion avec backoff
+      const d = _wsDelay;
+      _wsDelay = Math.min(_wsDelay * 2, 30000);
+      _wsTimer = setTimeout(connect, d);
+    }
+    // Page cachée : pas de timer — visibilitychange reconnectera
   };
   ws.onerror = () => ws.close();
 }

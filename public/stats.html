@@ -147,7 +147,8 @@ let capacity = 100;
 let currentEvent = '';
 let statsWs = null;
 let events = [];
-let wsReconnectDelay = 1000; // T2: backoff exponentiel
+let wsReconnectDelay = 1000;
+let wsTimer = null;
 const GROUP_COLORS = ['#f59e0b','#22c55e','#a855f7','#f97316','#06b6d4','#ec4899'];
 let groupDatasets = {}; // groupId → dataset index
 
@@ -338,7 +339,8 @@ function buildChart(history, currentTotal, cap, groups) {
       const color = GROUP_COLORS[i % GROUP_COLORS.length];
       datasets.push({
         label: g.name,
-        data: [...Array(history.length).fill(null), g.count],
+        // Remplit toute la période historique avec le count actuel → ligne visible dès le chargement
+        data: Array(labels.length).fill(g.count),
         borderColor: color,
         backgroundColor: 'transparent',
         fill: false, tension: 0.3, pointRadius: 0, pointHoverRadius: 4,
@@ -418,22 +420,56 @@ function pushPoint(total, groups) {
 
 // ── WebSocket (admin connection — no group) ──
 
+function wsReconnectNow() {
+  if (wsTimer) { clearTimeout(wsTimer); wsTimer = null; }
+  if (statsWs) {
+    const old = statsWs; statsWs = null;
+    old.onopen = old.onmessage = old.onerror = old.onclose = null;
+    try { old.close(); } catch {}
+  }
+  wsReconnectDelay = 1000;
+  if (currentEvent) connectWS(currentEvent);
+}
+
 function connectWS(eventId) {
+  if (statsWs && statsWs.readyState <= 1) return;
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const myWs = new WebSocket(`${proto}//${location.host}?e=${encodeURIComponent(eventId)}`);
   statsWs = myWs;
+  let lastMsg = Date.now();
+  let pingTimer = null;
 
-  myWs.onopen = () => { wsReconnectDelay = 1000; }; // T2: reset on success
+  myWs.onopen = () => {
+    wsReconnectDelay = 1000;
+    pingTimer = setInterval(() => {
+      if (myWs !== statsWs || myWs.readyState !== 1) return;
+      if (Date.now() - lastMsg > 60_000) { myWs.close(); return; }
+      myWs.send(JSON.stringify({ type: 'ping' }));
+    }, 20_000);
+  };
 
   myWs.onmessage = ({ data }) => {
+    lastMsg = Date.now();
     if (statsWs !== myWs) return;
     const msg = JSON.parse(data);
+    if (msg.type === 'pong') return;
+    if (msg.type === 'init') {
+      updateCount(msg.total);
+      fetchT(`/api/history?code=${adminCode}&e=${currentEvent}`)
+        .then(r => r.json())
+        .then(d => {
+          if (currentEvent !== eventId) return;
+          totalIn = d.totalIn ?? totalIn;
+          document.getElementById('s-in').textContent = totalIn;
+        })
+        .catch(() => {});
+      return;
+    }
     if (msg.type === 'update') {
       updateCount(msg.total);
       totalIn += (msg.delta > 0 ? msg.delta : 0);
       document.getElementById('s-in').textContent = totalIn;
       pushPoint(msg.total, msg.groups);
-      // Refresh group table counts
       if (msg.groups) {
         const tbody = document.getElementById('grp-body');
         if (tbody.children.length > 0) {
@@ -445,26 +481,33 @@ function connectWS(eventId) {
           if (foot.children[0]) foot.children[0].children[1].textContent = msg.total;
         }
       }
-    }
-    if (msg.type === 'update' && msg.capacity !== undefined) {
-      capacity = msg.capacity;
-      document.getElementById('s-cap').textContent = capacity;
-      if (chart) {
-        chart.data.datasets[1].data = Array(chart.data.labels.length).fill(capacity);
-        chart.update('none');
+      if (msg.capacity !== undefined) {
+        capacity = msg.capacity;
+        document.getElementById('s-cap').textContent = capacity;
+        if (chart) {
+          chart.data.datasets[1].data = Array(chart.data.labels.length).fill(capacity);
+          chart.update('none');
+        }
       }
     }
   };
 
   myWs.onclose = () => {
+    clearInterval(pingTimer);
     if (statsWs !== myWs) return;
     statsWs = null;
-    const d = wsReconnectDelay;
-    wsReconnectDelay = Math.min(wsReconnectDelay * 2, 30000); // T2
-    setTimeout(() => { if (currentEvent === eventId) connectWS(eventId); }, d);
+    if (!document.hidden) {
+      const d = wsReconnectDelay;
+      wsReconnectDelay = Math.min(wsReconnectDelay * 2, 30000);
+      wsTimer = setTimeout(() => { if (currentEvent === eventId) connectWS(eventId); }, d);
+    }
   };
   myWs.onerror = () => myWs.close();
 }
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && currentEvent) wsReconnectNow();
+});
 </script>
 </body>
 </html>

@@ -295,6 +295,7 @@ let events = [];
 let archivedEvents = [];       // U15
 let ws = null;
 let wsReconnectDelay = 1000;   // T2: backoff exponentiel
+let wsTimer = null;             // timer de reconnexion en cours
 
 // ── Helpers ──
 
@@ -483,26 +484,52 @@ function updateOperatorList(clients) {
 
 // ── WebSocket ──
 
+function wsReconnectNow() {
+  if (wsTimer) { clearTimeout(wsTimer); wsTimer = null; }
+  if (ws) {
+    const old = ws; ws = null;
+    old.onopen = old.onmessage = old.onerror = old.onclose = null;
+    try { old.close(); } catch {}
+  }
+  wsReconnectDelay = 1000;
+  if (currentEvent) startWS(currentEvent);
+}
+
 function startWS(eventId) {
-  if (ws && ws.readyState < 2) ws.close();
+  if (ws && ws.readyState <= 1) return; // déjà en cours
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const myWs = new WebSocket(`${proto}//${location.host}?e=${encodeURIComponent(eventId)}`);
   ws = myWs;
   let pingTimer = null;
+  let lastMsg = Date.now();
 
   myWs.onopen = () => {
-    wsReconnectDelay = 1000; // T2: reset backoff on success
+    wsReconnectDelay = 1000;
     loadIPs();
+    fetchT(`/api/history?code=${adminCode}&e=${eventId}`)
+      .then(r => r.json())
+      .then(d => {
+        if (currentEvent !== eventId) return;
+        const evt = events.find(e => e.id === eventId);
+        if (evt && d.groups) {
+          evt.total = d.total; evt.groups = d.groups;
+          renderGroupTable(d.groups, d.total, evt.capacity);
+        }
+      })
+      .catch(() => {});
     fetchT(`/api/clients?code=${adminCode}&e=${eventId}`)
       .then(r => r.json())
       .then(d => { if (currentEvent === eventId) updateOperatorList(d.clients); })
       .catch(() => {});
     pingTimer = setInterval(() => {
-      if (myWs.readyState === 1) myWs.send(JSON.stringify({ type: 'ping' }));
-    }, 25_000);
+      if (myWs !== ws || myWs.readyState !== 1) return;
+      if (Date.now() - lastMsg > 60_000) { myWs.close(); return; }
+      myWs.send(JSON.stringify({ type: 'ping' }));
+    }, 20_000);
   };
 
   myWs.onmessage = ({ data }) => {
+    lastMsg = Date.now();
     if (currentEvent !== eventId) return;
     const msg = JSON.parse(data);
     if (msg.type === 'pong') return;
@@ -510,11 +537,7 @@ function startWS(eventId) {
       const evt = events.find(e => e.id === eventId);
       if (evt) {
         evt.total = msg.total;
-        evt.groups = msg.groups.map(g => ({ ...g, ...(evt.groups?.find(eg => eg.id === g.id) || {}) }));
-        msg.groups.forEach(g => {
-          const eg = evt.groups.find(x => x.id === g.id);
-          if (eg) eg.count = g.count;
-        });
+        evt.groups = msg.groups.map(g => ({ ...(evt.groups?.find(eg => eg.id === g.id) || {}), ...g }));
       }
       renderGroupTable(msg.groups, msg.total, msg.capacity);
       renderQRSelector(msg.groups);
@@ -524,13 +547,21 @@ function startWS(eventId) {
 
   myWs.onclose = () => {
     clearInterval(pingTimer);
+    if (myWs !== ws) return;
+    ws = null;
     if (currentEvent !== eventId) return;
-    const d = wsReconnectDelay;
-    wsReconnectDelay = Math.min(wsReconnectDelay * 2, 30000); // T2
-    setTimeout(() => { if (currentEvent === eventId) startWS(eventId); }, d);
+    if (!document.hidden) {
+      const d = wsReconnectDelay;
+      wsReconnectDelay = Math.min(wsReconnectDelay * 2, 30000);
+      wsTimer = setTimeout(() => { if (currentEvent === eventId) startWS(eventId); }, d);
+    }
   };
   myWs.onerror = () => myWs.close();
 }
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && currentEvent) wsReconnectNow();
+});
 
 // ── Actions ──
 

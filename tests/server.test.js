@@ -6,7 +6,7 @@ const request = require('supertest');
 const WebSocket = require('ws');
 const { randomUUID } = require('node:crypto');
 
-const { server, state, eventSeenOps, trimSeenOps, wsClients } = require('../server');
+const { server, state, eventSeenOps, trimSeenOps, wsClients, recentlyDisconnected, buildSnapshot, applySnapshot } = require('../server');
 
 const ARCHIVED_EVT_ID = 'archevt';
 
@@ -34,6 +34,7 @@ function resetState() {
   eventSeenOps.clear();
   eventSeenOps.set(EVT_ID, new Set());
   wsClients.clear();
+  recentlyDisconnected.clear();
 }
 
 function wsUrl(groupId = GRP_ID) {
@@ -499,7 +500,7 @@ describe('WebSocket', () => {
     ws.on('error', done);
   });
 
-  test('déconnexion après hello → broadcast clients mis à jour', (_t, done) => {
+  test('déconnexion après hello → op toujours visible pendant grâce 30s', (_t, done) => {
     const observer = new WebSocket(wsUrl());
     observer.once('message', () => {
       const actor = new WebSocket(wsUrl());
@@ -512,7 +513,8 @@ describe('WebSocket', () => {
           observer.once('message', (data2) => {
             const leave = JSON.parse(data2);
             assert.equal(leave.type, 'clients');
-            assert.ok(!leave.clients.some(c => c.name === 'Partant'));
+            // U4: op reste visible pendant 30s après déconnexion
+            assert.ok(leave.clients.some(c => c.name === 'Partant'), 'encore visible pendant la grâce 30s');
             observer.close();
             done();
           });
@@ -522,6 +524,36 @@ describe('WebSocket', () => {
       actor.on('error', done);
     });
     observer.on('error', done);
+  });
+});
+
+// ── Grâce déco op 30s — U4 ───────────────────────────────────────────────────
+
+describe('Grâce déco op 30s — U4', () => {
+  test('op reste dans /api/clients après déconnexion (grâce active)', (_t, done) => {
+    const ws = new WebSocket(wsUrl());
+    ws.once('message', () => {
+      ws.send(JSON.stringify({ type: 'hello', name: 'EnGrace' }));
+      ws.once('message', () => { // clients broadcast après hello
+        ws.close();
+        setTimeout(async () => {
+          const res = await request(server).get(`/api/clients?code=admin123&e=${EVT_ID}`);
+          assert.ok(res.body.clients.some(c => c.name === 'EnGrace'), 'encore visible dans les 30s');
+          done();
+        }, 100);
+      });
+    });
+    ws.on('error', done);
+  });
+
+  test('op retiré de /api/clients après expiration grâce (>30s)', async () => {
+    const key = `${EVT_ID}:Expiré`;
+    recentlyDisconnected.set(key, {
+      name: 'Expiré', groupId: GRP_ID, eventId: EVT_ID,
+      disconnectedAt: Date.now() - 31_000,
+    });
+    const res = await request(server).get(`/api/clients?code=admin123&e=${EVT_ID}`);
+    assert.ok(!res.body.clients.some(c => c.name === 'Expiré'), 'retiré après 30s');
   });
 });
 
@@ -636,6 +668,130 @@ describe('POST /api/admin/config — deleteEvent', () => {
     await request(server).post('/api/admin/config')
       .send({ code: 'admin123', e: EVT_ID, deleteEvent: true });
     assert.ok(!eventSeenOps.has(EVT_ID));
+  });
+});
+
+// ── deleteEvent — fermeture WS (B5) ──────────────────────────────────────────
+
+describe('deleteEvent — fermeture WS (B5)', () => {
+  test('WS client reçoit close 4004 après deleteEvent', (_t, done) => {
+    const ws = new WebSocket(wsUrl());
+    ws.once('message', () => {
+      // Connexion établie (init reçu) — on supprime l'event
+      request(server).post('/api/admin/config')
+        .send({ code: 'admin123', e: EVT_ID, deleteEvent: true })
+        .end(() => {});
+      ws.on('close', (code) => {
+        assert.equal(code, 4004, 'doit fermer avec code 4004');
+        done();
+      });
+    });
+    ws.on('error', done);
+  });
+
+  test('deleteEvent ne ferme pas les WS d\'un autre event', (_t, done) => {
+    // Crée un second event
+    const EVT2 = 'testev2';
+    const GRP2 = 'testgrp2';
+    state.events[EVT2] = {
+      id: EVT2, name: 'Test 2', capacity: 100, history: [],
+      createdAt: Date.now(), archived: false,
+      groups: { [GRP2]: { id: GRP2, name: 'Principal', count: 0, totalIn: 0, totalOut: 0, opStats: {} } },
+    };
+    eventSeenOps.set(EVT2, new Set());
+
+    const ws2 = new WebSocket(`ws://localhost:${server.address().port}?e=${EVT2}&g=${GRP2}`);
+    ws2.once('message', () => {
+      // Supprime EVT_ID — ws2 (connecté sur EVT2) ne doit pas être fermé
+      let closed = false;
+      ws2.on('close', () => { closed = true; });
+      request(server).post('/api/admin/config')
+        .send({ code: 'admin123', e: EVT_ID, deleteEvent: true })
+        .end(() => {
+          setTimeout(() => {
+            assert.ok(!closed, 'ws2 ne doit pas être fermé');
+            ws2.close();
+            done();
+          }, 80);
+        });
+    });
+    ws2.on('error', done);
+  });
+});
+
+// ── Persistance seenOps — C1 ─────────────────────────────────────────────────
+
+describe('Persistance seenOps (C1)', () => {
+  test('buildSnapshot inclut les seenOps sous forme de tableau', () => {
+    const uuid = randomUUID();
+    eventSeenOps.set(EVT_ID, new Set([uuid, randomUUID()]));
+    const snap = buildSnapshot();
+    assert.ok(Array.isArray(snap.seenOps[EVT_ID]), 'seenOps[eventId] doit être un tableau');
+    assert.ok(snap.seenOps[EVT_ID].includes(uuid), 'le UUID doit être présent');
+  });
+
+  test('buildSnapshot plafonne à 5000 entrées par event', () => {
+    const big = new Set();
+    for (let i = 0; i < 8000; i++) big.add(String(i));
+    eventSeenOps.set(EVT_ID, big);
+    const snap = buildSnapshot();
+    assert.ok(snap.seenOps[EVT_ID].length <= 5000);
+    assert.equal(snap.seenOps[EVT_ID].length, 5000);
+  });
+
+  test('applySnapshot restaure les seenOps depuis un snapshot', () => {
+    const uuid = randomUUID();
+    const snap = { ...state, seenOps: { [EVT_ID]: [uuid, randomUUID()] } };
+    eventSeenOps.get(EVT_ID).clear();
+    applySnapshot(snap);
+    assert.ok(eventSeenOps.get(EVT_ID).has(uuid), 'UUID doit être restauré');
+  });
+
+  test('applySnapshot sans champ seenOps (ancien format) ne plante pas', () => {
+    const snap = { ...state }; // pas de seenOps
+    assert.doesNotThrow(() => applySnapshot(snap));
+  });
+
+  test('round-trip C1 : UUID connu rejeté comme doublon après applySnapshot', async () => {
+    const uuid = randomUUID();
+    // Premier envoi — accepté
+    const r1 = await request(server).post('/api/count')
+      .send({ delta: 1, uuid, e: EVT_ID, g: GRP_ID });
+    assert.equal(r1.body.dup, undefined);
+    assert.equal(grp().count, 1);
+
+    // Snapshot du state courant (count=1, seenOps contient uuid)
+    const snap = buildSnapshot();
+
+    // Simule un redémarrage : vide le seenOps en mémoire
+    eventSeenOps.get(EVT_ID).clear();
+    assert.equal(eventSeenOps.get(EVT_ID).size, 0);
+
+    // Restaure depuis le snapshot
+    applySnapshot(snap);
+    assert.ok(eventSeenOps.get(EVT_ID).has(uuid), 'UUID doit être restauré');
+
+    // Retry du même UUID — doit être rejeté
+    const r2 = await request(server).post('/api/count')
+      .send({ delta: 1, uuid, e: EVT_ID, g: GRP_ID });
+    assert.equal(r2.body.dup, true, 'doit être un doublon');
+    assert.equal(grp().count, 1, 'le compteur ne doit pas augmenter');
+  });
+
+  test('round-trip C1 : nouveau UUID après restore est accepté normalement', async () => {
+    const uuid1 = randomUUID();
+    await request(server).post('/api/count').send({ delta: 1, uuid: uuid1, e: EVT_ID, g: GRP_ID });
+
+    const snap = buildSnapshot();
+    eventSeenOps.get(EVT_ID).clear();
+    applySnapshot(snap);
+
+    // UUID différent — doit passer
+    const uuid2 = randomUUID();
+    const r = await request(server).post('/api/count')
+      .send({ delta: 1, uuid: uuid2, e: EVT_ID, g: GRP_ID });
+    assert.equal(r.body.dup, undefined);
+    assert.equal(grp().count, 2);
   });
 });
 

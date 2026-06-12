@@ -1,4 +1,3 @@
-import QRCode from 'qrcode';
 import { RegistryDO } from './registry.js';
 import { EventDO    } from './event.js';
 
@@ -44,14 +43,6 @@ async function resolveRole(env, code) {
   if (code === adminCode) return 'admin';
   if (permCode && code === permCode) return 'perm';
   return null;
-}
-
-async function generateQR(url) {
-  // QRCode.toString avec type svg n'utilise pas Canvas — fonctionne en Workers
-  const svg = await QRCode.toString(url, { type: 'svg', width: 400, margin: 2 });
-  const b64 = btoa(encodeURIComponent(svg).replace(/%([0-9A-F]{2})/g,
-    (_, p) => String.fromCharCode(parseInt(p, 16))));
-  return `data:image/svg+xml;base64,${b64}`;
 }
 
 // ── Worker entry point ────────────────────────────────────────────────────────
@@ -177,6 +168,8 @@ async function handleAPI(request, env, url, path) {
     }
 
     if (e && deleteEvent === true) {
+      // B5: ferme les WS actifs avant de retirer l'event du registre
+      try { await eventStub(env, e).fetch(iReq('/terminate', 'POST')); } catch {}
       await registryStub(env).fetch(iReq('/events/delete', 'POST', { id: e }));
       return Response.json({ ok: true });
     }
@@ -205,8 +198,10 @@ async function handleAPI(request, env, url, path) {
     const proto = request.headers.get('x-forwarded-proto') ?? 'https';
     const host  = request.headers.get('host');
     const opUrl = `${proto}://${host}/?e=${e}&g=${g}`;
-    const qr    = await generateQR(opUrl);
-    return Response.json({ qr, url: opUrl });
+    // T1: délègue au EventDO qui met en cache le QR
+    return eventStub(env, e).fetch(
+      iReq(`/qr?g=${encodeURIComponent(g)}&url=${encodeURIComponent(opUrl)}`)
+    );
   }
 
   if (path === '/api/clients' && method === 'GET') {
