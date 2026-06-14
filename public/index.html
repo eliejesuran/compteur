@@ -911,16 +911,16 @@ function closeScanner() {
 function parseEventURL(raw) {
   if (!raw) return null;
   const s = raw.trim();
-  let url;
-  try { url = new URL(s, location.origin); }
-  catch {
-    try { url = new URL('/?' + s.replace(/^[?#]/, ''), location.origin); }
-    catch { return null; }
-  }
-  const e = url.searchParams.get('e');
-  const g = url.searchParams.get('g');
-  if (!e || !g) return null;
-  return { e, g };
+  const tryParse = (str) => {
+    try {
+      const u = new URL(str, location.origin);
+      const e = u.searchParams.get('e');
+      const g = u.searchParams.get('g');
+      return (e && g) ? { e, g } : null;
+    } catch { return null; }
+  };
+  // 1) tel quel (URL complète ou relative) ; 2) sinon traité comme query nue
+  return tryParse(s) || tryParse('/?' + s.replace(/^[?#]/, ''));
 }
 
 function gotoEvent({ e, g }) {
