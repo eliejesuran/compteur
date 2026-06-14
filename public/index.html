@@ -345,6 +345,82 @@
       touch-action: manipulation;
     }
 
+    /* ── Saisie manuelle du lien (copié-collé hors ligne) ── */
+    #manual-link-btn {
+      display: none;
+      margin-top: 18px;
+      padding: 11px 18px;
+      border-radius: 12px;
+      border: 1.5px solid var(--blue);
+      background: rgba(59,130,246,0.12);
+      color: var(--blue);
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+    #manual-link-btn:active { background: rgba(59,130,246,0.25); }
+
+    #link-overlay {
+      display: none;
+      position: fixed; inset: 0;
+      background: var(--bg);
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      z-index: 200;
+    }
+    #link-overlay.open { display: flex; }
+    #link-card {
+      background: var(--surface);
+      border-radius: 22px;
+      padding: 32px 24px 24px;
+      width: 100%;
+      max-width: 340px;
+      text-align: center;
+    }
+    #link-card h2 { font-size: 22px; font-weight: 800; margin-bottom: 8px; }
+    #link-card p  { color: var(--muted); font-size: 13px; line-height: 1.5; margin-bottom: 20px; }
+    #link-input {
+      width: 100%;
+      padding: 13px;
+      border-radius: 12px;
+      border: 1.5px solid var(--btn-border);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 15px;
+      text-align: center;
+      outline: none;
+      margin-bottom: 6px;
+      -webkit-appearance: none;
+      word-break: break-all;
+    }
+    #link-input:focus { border-color: var(--blue); }
+    #link-err { color: var(--danger); font-size: 13px; min-height: 18px; margin-bottom: 12px; }
+    #link-card .btn-go {
+      width: 100%;
+      height: 52px;
+      border: none;
+      border-radius: 14px;
+      background: var(--blue);
+      color: #fff;
+      font-size: 17px;
+      font-weight: 800;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+    #link-card .btn-cancel {
+      width: 100%;
+      margin-top: 10px;
+      padding: 10px;
+      border: none;
+      background: none;
+      color: var(--muted);
+      font-size: 14px;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+
     /* ── Lien admin discret — U3 ── */
     #admin-link {
       position: fixed;
@@ -412,6 +488,7 @@
   <div id="count-label">personnes</div>
   <div id="group-sub"></div>
   <div id="bar-wrap"><div id="bar" style="width:0%"></div></div>
+  <button id="manual-link-btn" onclick="openLinkEntry()">Saisir le lien manuellement</button>
 </div>
 
 <div id="main-btns">
@@ -432,6 +509,19 @@
     <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
   </svg>
 </a>
+
+<!-- Overlay saisie manuelle du lien — copié-collé quand l'URL est invalide -->
+<div id="link-overlay">
+  <div id="link-card">
+    <h2>Coller le lien</h2>
+    <p>Collez le lien de l'événement<br>fourni par l'administrateur</p>
+    <input id="link-input" type="url" inputmode="url" placeholder="https://…/?e=…&g=…"
+           autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="go">
+    <div id="link-err"></div>
+    <button class="btn-go" onclick="submitLink()">Rejoindre</button>
+    <button class="btn-cancel" onclick="closeLinkEntry()">Annuler</button>
+  </div>
+</div>
 
 <!-- Overlay prénom — affiché uniquement à la première connexion -->
 <div id="name-overlay">
@@ -671,6 +761,7 @@ function connect() {
   if (!EVENT_ID || !GROUP_ID) {
     document.getElementById('status-text').textContent = 'URL invalide — utilisez le QR code';
     document.getElementById('dot').className = 'offline';
+    document.getElementById('manual-link-btn').style.display = 'inline-block';
     return;
   }
   // Empêche les doubles connexions
@@ -718,6 +809,7 @@ function connect() {
     setOnline(false);
     if (e.code === 4004) {
       document.getElementById('status-text').textContent = 'Événement ou groupe introuvable';
+      document.getElementById('manual-link-btn').style.display = 'inline-block';
       return;
     }
     if (!document.hidden) {
@@ -814,14 +906,57 @@ function closeScanner() {
   document.getElementById('scan-hint').textContent = 'Pointez la caméra vers le QR code';
 }
 
-function handleScannedURL(raw) {
+// Extrait {e,g} d'un lien collé ou scanné. Accepte une URL complète,
+// une URL relative (/?e=…&g=…) ou juste la query (?e=…&g=… ou e=…&g=…).
+function parseEventURL(raw) {
+  if (!raw) return null;
+  const s = raw.trim();
   let url;
-  try { url = new URL(raw); } catch { return; }
+  try { url = new URL(s, location.origin); }
+  catch {
+    try { url = new URL('/?' + s.replace(/^[?#]/, ''), location.origin); }
+    catch { return null; }
+  }
   const e = url.searchParams.get('e');
   const g = url.searchParams.get('g');
-  if (!e || !g) return;
+  if (!e || !g) return null;
+  return { e, g };
+}
+
+function gotoEvent({ e, g }) {
   window.location.href = `/?e=${encodeURIComponent(e)}&g=${encodeURIComponent(g)}`;
 }
+
+function handleScannedURL(raw) {
+  const p = parseEventURL(raw);
+  if (p) gotoEvent(p);
+}
+
+// ── Saisie manuelle du lien ─────────────────────────────────────────
+function openLinkEntry() {
+  document.getElementById('link-err').textContent = '';
+  document.getElementById('link-overlay').classList.add('open');
+  const input = document.getElementById('link-input');
+  input.value = '';
+  setTimeout(() => input.focus(), 50);
+}
+
+function closeLinkEntry() {
+  document.getElementById('link-overlay').classList.remove('open');
+}
+
+function submitLink() {
+  const p = parseEventURL(document.getElementById('link-input').value);
+  if (!p) {
+    document.getElementById('link-err').textContent = 'Lien invalide — vérifiez le copié-collé';
+    return;
+  }
+  gotoEvent(p);
+}
+
+document.getElementById('link-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); submitLink(); }
+});
 
 initScanBtn();
 

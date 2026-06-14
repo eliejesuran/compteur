@@ -78,7 +78,9 @@
     .grp-table tfoot .g-count { color: var(--accent); }
     /* QR */
     #qr-img { display: block; width: 220px; margin: 12px auto; border-radius: 12px; }
-    #qr-url { text-align: center; font-size: 12px; color: var(--muted); word-break: break-all; margin-top: 6px; }
+    #qr-url { text-align: center; font-size: 12px; word-break: break-all; margin-top: 6px; }
+    #qr-url a { color: var(--accent); text-decoration: none; }
+    #qr-url a:hover { text-decoration: underline; }
     #ip-list { font-size: 12px; color: var(--muted); margin-top: 10px; line-height: 1.8; }
     #ip-list a { color: var(--accent); text-decoration: none; }
     /* Operators */
@@ -447,7 +449,8 @@ async function loadQR(groupId) {
   try {
     const qd = await fetchT(`/api/qr?code=${adminCode}&e=${currentEvent}&g=${groupId}`).then(r => r.json());
     document.getElementById('qr-img').src = qd.qr;
-    document.getElementById('qr-url').textContent = qd.url;
+    document.getElementById('qr-url').innerHTML =
+      `<a href="${esc(qd.url)}" target="_blank" rel="noopener">${esc(qd.url)}</a>`;
   } catch {}
 }
 
