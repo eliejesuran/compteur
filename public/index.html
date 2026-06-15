@@ -51,6 +51,7 @@
     html, body {
       height: 100%;
       height: 100dvh;
+      height: var(--app-height, 100dvh); /* U18 : piloté en JS si dispo, sinon 100dvh */
       color: var(--text);
       font-family: system-ui, -apple-system, sans-serif;
       overflow: hidden;
@@ -542,9 +543,42 @@ let groupName = '';  // nom de ce groupe
 let capacity = 100;
 let alertActive = false;
 
-// Paramètres d'URL — obligatoires
-const EVENT_ID = new URLSearchParams(location.search).get('e') || '';
-const GROUP_ID = new URLSearchParams(location.search).get('g') || '';
+// Paramètres d'URL — avec persistance (U19).
+// Présents dans l'URL → sauvegardés. Absents (lancement PWA start_url=/) → restaurés.
+const _params = new URLSearchParams(location.search);
+let EVENT_ID = _params.get('e') || '';
+let GROUP_ID = _params.get('g') || '';
+
+const LAST_LINK_KEY = 'op_last_link';
+if (EVENT_ID && GROUP_ID) {
+  try { localStorage.setItem(LAST_LINK_KEY, JSON.stringify({ e: EVENT_ID, g: GROUP_ID })); } catch {}
+} else {
+  try {
+    const last = JSON.parse(localStorage.getItem(LAST_LINK_KEY) || 'null');
+    if (last && last.e && last.g) {
+      EVENT_ID = last.e;
+      GROUP_ID = last.g;
+      // URL cohérente : un reload manuel et le contexte WS/QR restent corrects
+      history.replaceState(null, '', `/?e=${encodeURIComponent(EVENT_ID)}&g=${encodeURIComponent(GROUP_ID)}`);
+    }
+  } catch {}
+}
+
+// ── U18 : hauteur réelle du viewport ────────────────────────────────
+// En PWA (Android/iOS) le viewport n'est pas stabilisé au 1er rendu :
+// 100dvh peut être trop grand → les boutons du bas sont poussés hors écran
+// (l'utilisateur corrigeait en éteignant/rallumant l'écran = resize).
+// On pilote la hauteur via window.innerHeight + recalcul sur events et en différé.
+function setAppHeight() {
+  document.documentElement.style.setProperty('--app-height', window.innerHeight + 'px');
+}
+setAppHeight();
+requestAnimationFrame(setAppHeight);
+setTimeout(setAppHeight, 300);
+window.addEventListener('resize', setAppHeight);
+window.addEventListener('orientationchange', setAppHeight);
+window.addEventListener('pageshow', setAppHeight);
+if (window.visualViewport) window.visualViewport.addEventListener('resize', setAppHeight);
 
 // Identité de l'opérateur — demandée une fois, stockée en localStorage
 let opName = '';
@@ -732,6 +766,7 @@ if (navigator.wakeLock) acquireWakeLock();
 window.addEventListener('online', flush);
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) {
+    setAppHeight(); // U18 : retour au 1er plan (ex. rallumage écran) → recale la hauteur
     if (queue.length > 0) flush();
     if (navigator.wakeLock && !_wakeLock) acquireWakeLock();
     wsReconnectNow();

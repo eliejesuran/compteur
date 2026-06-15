@@ -67,6 +67,8 @@ Backoff reconnexion : 1s→2s→4s→…→30s, reset sur succès ou switch even
 - **`run_worker_first: true` OBLIGATOIRE** (wrangler.jsonc) : par défaut Workers Assets sert les fichiers statiques AVANT le Worker → l'upgrade WS sur `/?e=X&g=Y` recevait `index.html` (200, même CF-cache HIT) au lieu du 101 → opérateurs toujours hors ligne en prod. Corrigé 2026-06-12. Vérifiable : `curl -i -H "Upgrade: websocket" …/?e=x&g=x` doit renvoyer 404 DO (event bidon) ou 101, jamais du HTML.
 - **Dot online opérateur = état WS uniquement** : `flush()` ne touche plus `setOnline` (avant : queue vide → online même sans WS, d'où "en ligne au clic puis hors ligne").
 - **Handlers hibernation DO** (`webSocketMessage/Close/Error` event.js) : toujours `await this._load()` avant d'accéder à `this._s` — après hibernation `_s` est null.
+- **Persistance lien op (U19)** : clé localStorage `op_last_link` = `{e,g}`. Écrite au boot si l'URL porte `e&g` ; relue si absents (PWA `start_url=/`) → `EVENT_ID/GROUP_ID` (passés en `let`) restaurés + `history.replaceState`. Chaque op de la queue garde ses propres `e/g` → restauration sans effet de bord sur le flush. Lien mort restauré → 4004 → bouton saisie manuelle (graceful, cf. U16).
+- **Hauteur viewport (U18)** : `--app-height` = `window.innerHeight` piloté en JS (`setAppHeight`), CSS `height: var(--app-height, 100dvh)`. Recalcul sur resize/orientationchange/pageshow/visualViewport + rAF + 300 ms + visibilitychange. Sans JS → fallback `100dvh`. `setAppHeight` lit toujours `innerHeight` (pas `visualViewport.height`) → clavier Android ne réduit pas la mise en page.
 
 ## Backlog
 | ID | Titre | Approche |
@@ -79,8 +81,8 @@ Backoff reconnexion : 1s→2s→4s→…→30s, reset sur succès ou switch even
 | U15 | Remonter les Boutons + et -  pour mieux voir |  |
 | U16 | ✅ **FAIT** Saisie manuelle du lien hors ligne | Bouton « Saisir le lien manuellement » + overlay `#link-overlay` (copié-collé) affichés quand URL invalide / event introuvable (4004) ; `parseEventURL` accepte URL complète, relative ou query seule → reste dans l'app |
 | U17 | ✅ **FAIT** Lien QR admin cliquable | `#qr-url` rendu en `<a target="_blank" rel="noopener">` au lieu de texte brut |
-| U18 | Remonter +1 -1 +5 -5 bouton admin | les boutons +1 -1 +5 -5 et admin sont trop bas une fois connecté à un lien |
-| U19 | Persistance du lien | Quand l'application quitte, garder la dernière URL pour s'y connecter directement (pour l'instant perte de l'URL) |
+| U18 | ✅ **FAIT** Boutons trop bas au lancement | Cause : en PWA (Android) le viewport n'est pas stabilisé au 1er rendu → `100dvh` trop grand → boutons du bas poussés hors écran (un resize via extinction/rallumage corrigeait). Fix : hauteur pilotée par `--app-height` = `window.innerHeight`, recalculée sur `resize`/`orientationchange`/`pageshow`/`visualViewport` + différé (rAF + 300 ms) + retour 1er plan (`visibilitychange`). CSS : `height: var(--app-height, 100dvh)` |
+| U19 | ✅ **FAIT** Persistance du lien | `e`/`g` présents dans l'URL → sauvegardés en localStorage (`op_last_link`). Absents (lancement PWA `start_url=/`) → restaurés + `history.replaceState`. Au relancement : reconnexion directe au dernier événement (online, ou file d'attente si hors ligne) au lieu de « URL invalide ». Atténue B7. |
 | T1 | ✅ **FAIT** Cache QR EventDO | `this._qrCache={url,qr}` dans EventDO · invalidé si URL change · QR généré dans event.js (import QRCode) · route index.js délègue au DO |
 
 ## Bugs & Lacunes de robustesse
