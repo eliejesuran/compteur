@@ -6,7 +6,7 @@ const request = require('supertest');
 const WebSocket = require('ws');
 const { randomUUID } = require('node:crypto');
 
-const { server, state, eventSeenOps, trimSeenOps, wsClients, recentlyDisconnected, buildSnapshot, applySnapshot } = require('../server');
+const { server, state, eventSeenOps, trimSeenOps, wsClients, recentlyDisconnected, rlBuckets, buildSnapshot, applySnapshot } = require('../server');
 
 const ARCHIVED_EVT_ID = 'archevt';
 
@@ -35,6 +35,7 @@ function resetState() {
   eventSeenOps.set(EVT_ID, new Set());
   wsClients.clear();
   recentlyDisconnected.clear();
+  rlBuckets.clear(); // S3: bucket partagé (même IP loopback) — repartir à plein chaque test
 }
 
 function wsUrl(groupId = GRP_ID) {
@@ -918,6 +919,23 @@ describe('Plafond groupes (R4/L1)', () => {
     const over = await request(server).post('/api/groups').send({ code: 'admin123', e: EVT_ID, name: 'over' });
     assert.equal(over.status, 409);
     assert.match(over.body.error, /Limite atteinte/);
+  });
+});
+
+describe('Rate-limit local (S3)', () => {
+  test('429 + Retry-After au-delà du burst, sans perte de comptage', async () => {
+    const N = 400; // > burst (300) → déclenche le rate-limit malgré le refill
+    let r200 = 0, r429 = 0, retryAfter = null;
+    for (let i = 0; i < N; i++) {
+      const res = await request(server).post('/api/count')
+        .send({ delta: 1, uuid: `rl${i}`, e: EVT_ID, g: GRP_ID });
+      if (res.status === 200) r200++;
+      else if (res.status === 429) { r429++; retryAfter = res.headers['retry-after']; }
+    }
+    assert.ok(r429 >= 1, 'le rate-limit doit déclencher');
+    assert.ok(r200 >= 300, 'le burst (~300) doit passer');
+    assert.ok(retryAfter, 'le 429 porte un en-tête Retry-After');
+    assert.equal(grp().count, r200, 'aucun compte perdu ni dupliqué');
   });
 });
 

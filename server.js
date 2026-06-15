@@ -14,6 +14,10 @@ const MAX_EVENTS = 50;   // événements au total (archivés inclus)
 const MAX_GROUPS = 20;   // groupes par événement
 const MAX_OPS    = 100;  // opérateurs distincts (opStats) par groupe
 
+// S3 : rate-limit local (token bucket par IP) — mêmes valeurs que le Worker CF (L3)
+const RL_CAPACITY = 300; // burst max d'une salve
+const RL_RATE     = 20;  // tokens/s rechargés (débit soutenu)
+
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
@@ -44,6 +48,7 @@ function checkAuth(code) {
 const eventSeenOps       = new Map(); // eventId → Set<uuid>
 const wsClients          = new Map(); // ws → {name, connectedAt, eventId, groupId}
 const recentlyDisconnected = new Map(); // U4: `${eventId}:${name}` → {name,groupId,eventId,disconnectedAt}
+const rlBuckets          = new Map(); // S3: ip → {tokens, lastMs} (token bucket)
 
 // --- Helpers ---
 
@@ -89,6 +94,25 @@ function getLocalIPs() {
     .flat()
     .filter(i => i.family === 'IPv4' && !i.internal)
     .map(i => i.address);
+}
+
+// S3: token bucket par IP — miroir local de _rl_check (event.js). false si rate limited.
+function rlCheck(ip) {
+  const now = Date.now();
+  // purge des IPs inactives depuis >1h quand la Map dépasse 500 entrées
+  if (rlBuckets.size > 500) {
+    for (const [k, v] of rlBuckets) {
+      if (now - v.lastMs > 3_600_000) rlBuckets.delete(k);
+    }
+  }
+  let b = rlBuckets.get(ip);
+  if (!b) { b = { tokens: RL_CAPACITY, lastMs: now }; rlBuckets.set(ip, b); }
+  const elapsed = (now - b.lastMs) / 1000;
+  b.tokens = Math.min(RL_CAPACITY, b.tokens + elapsed * RL_RATE);
+  b.lastMs = now;
+  if (b.tokens < 1) return false;
+  b.tokens -= 1;
+  return true;
 }
 
 // --- Persistence ---
@@ -185,6 +209,10 @@ function logClients(action, name, eventId, groupId) {
 
 // Core counting — scoped to a group within an event
 app.post('/api/count', (req, res) => {
+  // S3: rate-limit par IP (token bucket) AVANT tout traitement
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  if (!rlCheck(ip)) return res.status(429).set('Retry-After', '1').json({ error: 'rate limited' });
+
   const { delta, uuid, name, e, g } = req.body ?? {};
   if (typeof uuid !== 'string' || !uuid) return res.status(400).json({ error: 'uuid required' });
   if (![-5, -1, 1, 5].includes(delta)) return res.status(400).json({ error: 'invalid delta' });
@@ -545,4 +573,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, server, state, eventSeenOps, trimSeenOps, wsClients, recentlyDisconnected, checkAdmin, checkAuth, buildSnapshot, applySnapshot };
+module.exports = { app, server, state, eventSeenOps, trimSeenOps, wsClients, recentlyDisconnected, rlBuckets, checkAdmin, checkAuth, buildSnapshot, applySnapshot };

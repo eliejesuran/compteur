@@ -57,6 +57,8 @@ Backoff reconnexion : 1s→2s→4s→…→30s, reset sur succès ou switch even
 - **UI optimiste** : total + groupe mis à jour avant ack serveur.
 - **Broadcast** : un JSON par event, tous les clients extraient leur groupe côté JS → O(1) sérialisation.
 - **seenOps** trimmé 20k→10k. History plafonnée à 2 880 pts (24h @ 30s).
+- **Plafonds anti-DoS (R4)** : `MAX_EVENTS=50` (archivés inclus) · `MAX_GROUPS=20`/event · `MAX_OPS=100`/groupe. Dépassement création → **409**. opStats au plafond : nom nouveau ignoré mais **comptage jamais bloqué**. Constantes dupliquées cloud (registry/event.js) + local (server.js) — garder alignées.
+- **Rate-limit token bucket (S3/L3)** : `RL_CAPACITY=300` (burst) · `RL_RATE=20`/s, par IP, en tête de `/api/count` cloud (`_rl_check`, ip = `cf-connecting-ip`) ET local (`rlCheck`, ip = `req.ip`). Dépassement → **429 + `Retry-After`**. **Le client ne jette JAMAIS un 429** : `flush()` fait `break` et relance (sinon perte de comptage). Garder les deux buckets alignés.
 - **Rôle PERM** : `permCode` distinct — UI masque capacité/reset/archive/codes/groupes-edit.
 - **Fond ASCII `index.html`** : fond sur `html` uniquement, `body` sans background → `#bxl-bg {z-index:-1}` visible.
 - **Charts groupes `stats.html`** : lignes par groupe (tirets, 6 couleurs) démarrent à la connexion WS — historique API ne contient que le total.
@@ -77,6 +79,8 @@ Backoff reconnexion : 1s→2s→4s→…→30s, reset sur succès ou switch even
 | U15 | Remonter les Boutons + et -  pour mieux voir |  |
 | U16 | ✅ **FAIT** Saisie manuelle du lien hors ligne | Bouton « Saisir le lien manuellement » + overlay `#link-overlay` (copié-collé) affichés quand URL invalide / event introuvable (4004) ; `parseEventURL` accepte URL complète, relative ou query seule → reste dans l'app |
 | U17 | ✅ **FAIT** Lien QR admin cliquable | `#qr-url` rendu en `<a target="_blank" rel="noopener">` au lieu de texte brut |
+| U18 | Remonter +1 -1 +5 -5 bouton admin | les boutons +1 -1 +5 -5 et admin sont trop bas une fois connecté à un lien |
+| U19 | Persistance du lien | Quand l'application quitte, garder la dernière URL pour s'y connecter directement (pour l'instant perte de l'URL) |
 | T1 | ✅ **FAIT** Cache QR EventDO | `this._qrCache={url,qr}` dans EventDO · invalidé si URL change · QR généré dans event.js (import QRCode) · route index.js délègue au DO |
 
 ## Bugs & Lacunes de robustesse
@@ -103,6 +107,8 @@ Backoff reconnexion : 1s→2s→4s→…→30s, reset sur succès ou switch even
 | B4 | `src/event.js` | ✅ **CORRIGÉ** — `_rl_check` purge les IPs inactives depuis >1h quand `_rl.size > 500`. |
 | B5 | `src/event.js` + `src/index.js` + `server.js` | ✅ **CORRIGÉ** — endpoint `/terminate` dans EventDO ferme tous les WS avec code 4004 ; appelé par `index.js` avant la suppression registre. `server.js` ferme directement les WS locaux. 2 tests ajoutés. |
 | B6 | `server.js` | ✅ **CORRIGÉ** — `scheduleSave()` ajouté en fin du handler `/api/admin/config` (couvre capacity, name, code, perm, archive, group rename/delete) et dans le branch `deleteEvent`. |
+| B7 | 'public/index.html' |  si déconnecté d'internet, et application quittée, le rebranchement n'est pas spécialement cohérent. |
+
 
 ---
 
@@ -112,7 +118,7 @@ Backoff reconnexion : 1s→2s→4s→…→30s, reset sur succès ou switch even
 |---|---|---|
 | S1 | `public/admin.html`, `public/stats.html` | **Code admin en query param GET** (`/api/events?code=X`, `/api/history?code=X`…) — exposé dans les logs d'accès serveur, l'historique navigateur, et les headers Referer vers des tiers. |
 | S2 | `public/index.html` L13, `public/admin.html` L794 | **Pas de SRI sur les scripts CDN** (jsQR, SheetJS) — compromission du CDN = exécution de code arbitraire. Ajouter `integrity="sha384-…" crossorigin="anonymous"`. |
-| S3 | `server.js` | **Pas de rate-limiting sur le serveur local** — `/api/count` peut être martelé. Le serveur CF a un token bucket (event.js) mais pas le local. |
+| S3 | `server.js` | ✅ **CORRIGÉ** — token bucket par IP `rlCheck()` (miroir local de `_rl_check`), `RL_CAPACITY=300 · RL_RATE=20`, appelé en tête de `/api/count` → 429 + `Retry-After`. Clé = `req.ip`/`socket.remoteAddress` (per-device en LAN ; **pas de `trust proxy`** → non spoofable, mais derrière un tunnel toutes les requêtes partagent un bucket — le Worker CF reste le chemin prod via `cf-connecting-ip`). 1 test. |
 | S4 | `src/index.js`, `server.js` | **Event ID = 3 octets / 6 hex** (~16M possibilités) — brute-forceable depuis le réseau local pour découvrir des events. `/api/state` et `/api/history` sont non-authentifiés pour les IDs connus. |
 
 ---
@@ -121,9 +127,9 @@ Backoff reconnexion : 1s→2s→4s→…→30s, reset sur succès ou switch even
 
 | ID | Description |
 |---|---|
-| L1 | Aucune limite sur le nombre de groupes par event ni d'events au total — un admin peut saturer la mémoire/storage. |
-| L2 | `opStats` non borné en nombre d'entrées — noms d'opérateurs illimités par groupe. |
-| L3 | Token bucket CF : burst initial de 2 000 requêtes par IP — un attaquant connaissant un event ID peut injecter 2 000 faux comptes en une salve. |
+| L1 | ✅ **CORRIGÉ** (R4) — plafonds 50 events (registry.js + server.js) et 20 groupes/event (event.js + server.js), 409 si dépassé. Archivés comptés dans les 50 (storage). |
+| L2 | ✅ **CORRIGÉ** (R4) — opStats plafonné à 100 noms/groupe (event.js + server.js). Un nouveau nom au-delà n'est plus tracké **mais le comptage total/groupe reste exact** (jamais de perte). |
+| L3 | ✅ **CORRIGÉ** — burst du token bucket CF réduit **2 000 → 300** (`RL_CAPACITY` hoistée en constante module, `event.js`). Salve max divisée par ~6,6 ; débit soutenu inchangé (20/s). 300 absorbe un flush multi-opérateurs derrière un même IP de lieu. 1 test (`runInDurableObject`). |
 
 ## Revue 2026-06-12 — bugs
 
@@ -166,16 +172,19 @@ Backoff reconnexion : 1s→2s→4s→…→30s, reset sur succès ou switch even
 
 | ID | Description | Approche |
 |---|---|---|
-| R1 | `flush()` ignore `Retry-After` sur 429 → la boucle 2s aggrave un rate-limit | Backoff : sur 429, suspendre flush `Retry-After` secondes |
+| R1 | ✅ **CORRIGÉ (cœur)** — `flush()` traitait un **429 comme un 4xx définitif → `queue.shift()` jetait le compte** (perte silencieuse, aggravée par S3/L3). Désormais 429/5xx → `break` (op conservée, relance via `setInterval` 2s/online/visibility). Reste optionnel : parser `Retry-After` pour un backoff > 2s. | Backoff explicite : suspendre flush `Retry-After` s |
 | R2 | Queue localStorage non plafonnée (opérateur hors ligne des heures) | Plafond 5 000 ops + bandeau UI « synchronisation requise » |
 | R3 | `/api/qr` Express : async sans try/catch → rejet non géré si QRCode échoue | try/catch → 500 JSON propre |
-| R4 | L1/L2 : limites manquantes events/groupes/opStats | Caps : 50 events, 20 groupes/event, 100 opérateurs/groupe |
-| R5 | Pas de test automatisé du Worker CF (event.js/index.js/registry.js non couverts) | Vitest + `@cloudflare/vitest-pool-workers` ou tests d'intégration `wrangler dev` |
+| R4 | ✅ **FAIT** Caps L1/L2 | Constantes `MAX_EVENTS=50 · MAX_GROUPS=20 · MAX_OPS=100` dupliquées cloud (registry/event.js) + local (server.js). Création refusée → 409 `{error}` ; admin.html `alert()` (plus d'échec silencieux). opStats : cap sans perte de comptage. Tests : 3 Worker + 3 local |
+| R5 | ✅ **FAIT** Tests Worker CF | `@cloudflare/vitest-pool-workers` (v4 API : plugin `cloudflareTest` dans `vitest.config.mjs`) — `tests/worker/worker.test.js` exerce index.js+EventDO+RegistryDO via `SELF.fetch` (création/auth/count/dedup/groupes/archive/delete). Singleton RegistryDO : cache mémoire persiste entre tests (isolatedStorage = storage only) → assertions scopées par id. `npm run test:worker` |
 
 ## Dev
 ```bash
 npm start          # local (affiche IPs + code admin)
 npm run cf:dev     # wrangler dev (DO simulés)
 npm run deploy     # CF — nécessite wrangler login + plan Paid (DO)
+npm test           # tous : local (node:test) + worker (vitest-pool-workers)
+npm run test:local # serveur Express (tests/server.test.js)
+npm run test:worker# Worker CF (tests/worker/*.test.js, runtime workerd)
 ```
 Code admin par défaut : `admin123`

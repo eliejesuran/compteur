@@ -692,14 +692,16 @@ async function flush() {
           body: JSON.stringify(op),
         });
         if (!res.ok) {
-          if (res.status < 500) {
-            // 4xx — requête invalide ou événement introuvable, l'op ne passera jamais
-            queue.shift();
-            localStorage.setItem('op_queue', JSON.stringify(queue));
-            renderQueueBadge();
-          } else {
-            break; // 5xx transitoire — réessayer plus tard
+          if (res.status === 429 || res.status >= 500) {
+            // 429 rate-limité ou 5xx transitoire — NE PAS jeter : réessayer plus tard
+            // (setInterval 2s / online / visibilitychange relancent flush). Sinon un
+            // pic de rate-limit perdrait des comptes en les shift()ant en boucle.
+            break;
           }
+          // autres 4xx — requête invalide ou événement introuvable : l'op ne passera jamais
+          queue.shift();
+          localStorage.setItem('op_queue', JSON.stringify(queue));
+          renderQueueBadge();
           continue;
         }
         const data = await res.json();

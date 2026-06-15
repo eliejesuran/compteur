@@ -4,6 +4,12 @@ import QRCode from 'qrcode';
 const MAX_GROUPS = 20;  // R4/L1 : groupes max par événement
 const MAX_OPS    = 100; // R4/L2 : opérateurs distincts trackés (opStats) par groupe
 
+// L3 : token bucket par IP. CAPACITY = burst max d'une salve (réduit de 2000 → 300
+// pour limiter l'injection en rafale) ; RATE = débit soutenu rechargé (tokens/s).
+// 300 absorbe un flush de file multi-opérateurs derrière un même IP de lieu.
+const RL_CAPACITY = 300;
+const RL_RATE     = 20;
+
 async function generateQR(url) {
   const svg = await QRCode.toString(url, { type: 'svg', width: 400, margin: 2 });
   const b64 = btoa(encodeURIComponent(svg).replace(/%([0-9A-F]{2})/g,
@@ -31,9 +37,8 @@ export class EventDO extends DurableObject {
     this._qrCache      = null;      // T1: {url, qr}
   }
 
-  // T3: token bucket — capacity=2000, refill=20/s. Returns false if rate limited.
+  // T3/L3: token bucket — burst=RL_CAPACITY (300), refill=RL_RATE/s. false si rate limited.
   _rl_check(ip) {
-    const CAPACITY = 2000, RATE = 20;
     const now = Date.now();
     // B4: purge IPs inactives depuis >1h quand la Map dépasse 500 entrées
     if (this._rl.size > 500) {
@@ -42,9 +47,9 @@ export class EventDO extends DurableObject {
       }
     }
     let b = this._rl.get(ip);
-    if (!b) { b = { tokens: CAPACITY, lastMs: now }; this._rl.set(ip, b); }
+    if (!b) { b = { tokens: RL_CAPACITY, lastMs: now }; this._rl.set(ip, b); }
     const elapsed = (now - b.lastMs) / 1000;
-    b.tokens = Math.min(CAPACITY, b.tokens + elapsed * RATE);
+    b.tokens = Math.min(RL_CAPACITY, b.tokens + elapsed * RL_RATE);
     b.lastMs = now;
     if (b.tokens < 1) return false;
     b.tokens -= 1;

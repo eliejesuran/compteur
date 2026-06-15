@@ -1,4 +1,4 @@
-import { SELF } from 'cloudflare:test';
+import { SELF, env, runInDurableObject } from 'cloudflare:test';
 import { describe, it, expect } from 'vitest';
 
 // R5 — tests d'intégration du Worker CF.
@@ -196,6 +196,22 @@ describe('Plafond opStats (R4/L2) — 100/groupe', () => {
     expect(grp.opStats['Op100']).toBeUndefined();         // nouveau > cap : non tracké
     expect(grp.opStats['Op0'].in).toBe(2);                // existant : continue d'accumuler
     expect(grp.totalIn).toBe(102);                        // comptage jamais perdu
+  });
+});
+
+describe('Rate-limit / burst CF (L3) — réduit de 2000 à ~300', () => {
+  it('le token bucket plafonne le burst bien sous l\'ancien 2000', async () => {
+    const { id: e } = await createEvent();
+    const stub = env.EVENT.get(env.EVENT.idFromName(e));
+    // Appels synchrones dans le même tick → aucun temps ne passe → aucun refill :
+    // on mesure le burst pur. Le chemin HTTP 429 est couvert par le test local S3.
+    const allowed = await runInDurableObject(stub, (instance) => {
+      let ok = 0;
+      for (let i = 0; i < 1000; i++) if (instance._rl_check('9.9.9.9')) ok++;
+      return ok;
+    });
+    expect(allowed).toBeGreaterThan(0);
+    expect(allowed).toBeLessThan(600); // ancien burst = 2000 → garde anti-régression
   });
 });
 
