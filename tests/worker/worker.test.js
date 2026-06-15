@@ -166,3 +166,53 @@ describe('Suppression (deleteEvent → terminate/purge N4)', () => {
     expect(events.find(ev => ev.id === e)).toBeUndefined();
   });
 });
+
+// ── Plafonds (R4/L1/L2) ──────────────────────────────────────────────────────
+
+describe('Plafond groupes (R4/L1) — 20/event', () => {
+  it('refuse le 21ᵉ groupe (409)', async () => {
+    const { id: e } = await createEvent(); // 1 groupe (Principal)
+    for (let i = 0; i < 19; i++) {
+      const r = await SELF.fetch(`${BASE}/api/groups`, J({ code: ADMIN, e, name: `G${i}` }));
+      expect(r.status).toBe(200);
+    }
+    const over = await SELF.fetch(`${BASE}/api/groups`, J({ code: ADMIN, e, name: 'over' }));
+    expect(over.status).toBe(409);
+    expect((await over.json()).error).toMatch(/Limite atteinte/);
+  });
+});
+
+describe('Plafond opStats (R4/L2) — 100/groupe', () => {
+  it('plafonne à 100 sans jamais perdre de comptage', async () => {
+    const { id: e, groups } = await createEvent();
+    const g = groups[0].id;
+    for (let i = 0; i < 100; i++) await count(e, g, 1, `op${i}`, `Op${i}`);
+    await count(e, g, 1, 'op100', 'Op100'); // 101ᵉ nom distinct → non tracké
+    await count(e, g, 1, 'op101', 'Op0');   // nom existant → accumule encore
+
+    const hist = await (await SELF.fetch(`${BASE}/api/history?code=${ADMIN}&e=${e}`)).json();
+    const grp = hist.groups.find(x => x.id === g);
+    expect(Object.keys(grp.opStats)).toHaveLength(100);   // plafonné
+    expect(grp.opStats['Op100']).toBeUndefined();         // nouveau > cap : non tracké
+    expect(grp.opStats['Op0'].in).toBe(2);                // existant : continue d'accumuler
+    expect(grp.totalIn).toBe(102);                        // comptage jamais perdu
+  });
+});
+
+// ⚠️ Doit rester le DERNIER bloc : il remplit le registre jusqu'au plafond.
+describe('Plafond événements (R4/L1) — 50 au total', () => {
+  async function totalEvents() {
+    const a  = await (await SELF.fetch(`${BASE}/api/events?code=${ADMIN}`)).json();
+    const ar = await (await SELF.fetch(`${BASE}/api/events/archived?code=${ADMIN}`)).json();
+    return a.events.length + ar.events.length;
+  }
+
+  it('refuse au-delà de 50 (409) — robuste au registre pré-rempli', async () => {
+    const n = await totalEvents();
+    // remplit jusqu'au plafond en parallèle (le RegistryDO sérialise les écritures)
+    await Promise.all(Array.from({ length: Math.max(0, 50 - n) }, () => createEvent()));
+    const over = await SELF.fetch(`${BASE}/api/events`, J({ code: ADMIN, name: 'over' }));
+    expect(over.status).toBe(409);
+    expect((await over.json()).error).toMatch(/Limite atteinte/);
+  }, 30000);
+});

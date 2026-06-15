@@ -1,5 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 
+const MAX_EVENTS = 50; // R4/L1 : plafond du nombre d'événements (archivés inclus — anti-saturation storage)
+
 export class RegistryDO extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
@@ -81,6 +83,13 @@ export class RegistryDO extends DurableObject {
     // POST /events — enregistre un nouvel événement dans l'index
     if (path === '/events' && request.method === 'POST') {
       const { id, name, capacity = 100 } = body ?? {};
+      // R4/L1 : refuse au-delà du plafond (sauf ré-enregistrement d'un id déjà présent)
+      if (!this._events[id] && Object.keys(this._events).length >= MAX_EVENTS) {
+        return Response.json(
+          { error: `Limite atteinte : ${MAX_EVENTS} événements maximum. Supprimez-en avant d'en créer un nouveau.` },
+          { status: 409 },
+        );
+      }
       this._events[id] = { id, name, capacity, createdAt: Date.now(), archived: false };
       await this.ctx.storage.put('events', this._events);
       return Response.json({ ok: true });

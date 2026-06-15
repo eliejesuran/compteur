@@ -1,6 +1,9 @@
 import { DurableObject } from 'cloudflare:workers';
 import QRCode from 'qrcode';
 
+const MAX_GROUPS = 20;  // R4/L1 : groupes max par événement
+const MAX_OPS    = 100; // R4/L2 : opérateurs distincts trackés (opStats) par groupe
+
 async function generateQR(url) {
   const svg = await QRCode.toString(url, { type: 'svg', width: 400, margin: 2 });
   const b64 = btoa(encodeURIComponent(svg).replace(/%([0-9A-F]{2})/g,
@@ -207,7 +210,9 @@ export class EventDO extends DurableObject {
 
       if (typeof opName === 'string') {
         const n = opName.trim().slice(0, 32);
-        if (n) {
+        // R4/L2 : un nouveau nom au-delà de MAX_OPS n'est plus tracké (opStats),
+        // mais le comptage total/groupe reste intact — jamais de perte de compte.
+        if (n && (grp.opStats[n] || Object.keys(grp.opStats).length < MAX_OPS)) {
           if (!grp.opStats[n]) grp.opStats[n] = { in: 0, out: 0 };
           if (delta > 0) grp.opStats[n].in  += delta;
           else           grp.opStats[n].out += Math.abs(delta);
@@ -241,6 +246,13 @@ export class EventDO extends DurableObject {
 
     // POST /groups
     if (path === '/groups' && request.method === 'POST') {
+      // R4/L1 : plafond du nombre de groupes par événement
+      if (Object.keys(this._s.groups).length >= MAX_GROUPS) {
+        return Response.json(
+          { error: `Limite atteinte : ${MAX_GROUPS} groupes maximum par événement.` },
+          { status: 409 },
+        );
+      }
       const id   = hexId();
       const name = (typeof body?.name === 'string' ? body.name.trim() : '').slice(0, 40) || 'Nouveau groupe';
       this._s.groups[id] = makeGroup(id, name);

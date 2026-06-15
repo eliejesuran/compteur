@@ -592,6 +592,8 @@ async function newEvent() {
     document.getElementById('event-sel').value = data.id;
     await loadEventUI(data.id);
     startWS(data.id);
+  } else if (data.error) {
+    alert(data.error); // R4/L1 : plafond atteint — ne pas échouer en silence
   }
 }
 
@@ -608,6 +610,8 @@ async function createGroup() {
     await loadEvents();
     const evt = events.find(e => e.id === currentEvent);
     if (evt) { renderQRSelector(evt.groups); loadQR(data.id); }
+  } else if (data.error) {
+    alert(data.error); // R4/L1 : plafond atteint — ne pas échouer en silence
   }
 }
 

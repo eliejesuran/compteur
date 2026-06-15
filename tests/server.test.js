@@ -890,3 +890,54 @@ describe('Rôle PERM', () => {
     assert.equal(state.permCode, null, 'trop court → null (désactivé)');
   });
 });
+
+// ── Plafonds — R4/L1/L2 ───────────────────────────────────────────────────────
+
+describe('Plafond événements (R4/L1)', () => {
+  test('refuse le 51ᵉ événement (409)', async () => {
+    // resetState → 1 event. On en crée 49 pour atteindre 50, le 51ᵉ est refusé.
+    for (let i = 0; i < 49; i++) {
+      const r = await request(server).post('/api/events').send({ code: 'admin123', name: `E${i}` });
+      assert.equal(r.status, 200);
+    }
+    assert.equal(Object.keys(state.events).length, 50);
+    const over = await request(server).post('/api/events').send({ code: 'admin123', name: 'over' });
+    assert.equal(over.status, 409);
+    assert.match(over.body.error, /Limite atteinte/);
+  });
+});
+
+describe('Plafond groupes (R4/L1)', () => {
+  test('refuse le 21ᵉ groupe (409)', async () => {
+    // resetState → 1 groupe (Principal). 19 ajouts → 20, le 21ᵉ est refusé.
+    for (let i = 0; i < 19; i++) {
+      const r = await request(server).post('/api/groups').send({ code: 'admin123', e: EVT_ID, name: `G${i}` });
+      assert.equal(r.status, 200);
+    }
+    assert.equal(Object.keys(evt().groups).length, 20);
+    const over = await request(server).post('/api/groups').send({ code: 'admin123', e: EVT_ID, name: 'over' });
+    assert.equal(over.status, 409);
+    assert.match(over.body.error, /Limite atteinte/);
+  });
+});
+
+describe('Plafond opStats (R4/L2)', () => {
+  test('plafonne à 100 sans jamais perdre de comptage', async () => {
+    for (let i = 0; i < 100; i++) {
+      await request(server).post('/api/count')
+        .send({ delta: 1, uuid: `c${i}`, e: EVT_ID, g: GRP_ID, name: `Op${i}` });
+    }
+    // 101ᵉ opérateur distinct → non tracké
+    await request(server).post('/api/count')
+      .send({ delta: 1, uuid: 'c100', e: EVT_ID, g: GRP_ID, name: 'Op100' });
+    // opérateur existant → continue d'accumuler malgré le plafond
+    await request(server).post('/api/count')
+      .send({ delta: 1, uuid: 'c101', e: EVT_ID, g: GRP_ID, name: 'Op0' });
+
+    const g = grp();
+    assert.equal(Object.keys(g.opStats).length, 100, 'opStats plafonné');
+    assert.equal(g.opStats['Op100'], undefined, 'nouveau > cap : non tracké');
+    assert.equal(g.opStats['Op0'].in, 2, 'existant : accumule encore');
+    assert.equal(g.count, 102, 'comptage jamais perdu');
+  });
+});

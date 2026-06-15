@@ -138,7 +138,10 @@ async function handleAPI(request, env, url, path) {
     const name = (typeof body?.name === 'string' ? body.name.trim() : '').slice(0, 40) || 'Nouvel événement';
     const id   = hexId();
 
-    await registryStub(env).fetch(iReq('/events', 'POST', { id, name }));
+    // R4/L1 : le registre peut refuser (plafond). Ne pas créer le DO orphelin si refus.
+    const regRes = await registryStub(env).fetch(iReq('/events', 'POST', { id, name }));
+    if (!regRes.ok) return Response.json(await regRes.json(), { status: regRes.status });
+
     const r = await eventStub(env, id).fetch(iReq('/init', 'POST', { id, name, capacity: 100 }));
     const data = await r.json();
     return Response.json(data);

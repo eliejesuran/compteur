@@ -9,6 +9,11 @@ const crypto = require('crypto');
 
 const STATE_FILE = path.join(__dirname, 'state.json');
 
+// R4/L1/L2 : plafonds anti-saturation (DoS doux) — alignés sur le Worker CF
+const MAX_EVENTS = 50;   // événements au total (archivés inclus)
+const MAX_GROUPS = 20;   // groupes par événement
+const MAX_OPS    = 100;  // opérateurs distincts (opStats) par groupe
+
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
@@ -202,7 +207,9 @@ app.post('/api/count', (req, res) => {
 
   if (typeof name === 'string') {
     const n = name.trim().slice(0, 32);
-    if (n) {
+    // R4/L2 : un nouveau nom au-delà de MAX_OPS n'est plus tracké (opStats),
+    // mais le comptage total/groupe reste intact — jamais de perte de compte.
+    if (n && (grp.opStats[n] || Object.keys(grp.opStats).length < MAX_OPS)) {
       if (!grp.opStats[n]) grp.opStats[n] = { in: 0, out: 0 };
       if (delta > 0) grp.opStats[n].in += delta;
       else grp.opStats[n].out += Math.abs(delta);
@@ -264,6 +271,10 @@ app.get('/api/events/archived', (req, res) => {
 // Create event — auto-creates one "Principal" group
 app.post('/api/events', (req, res) => {
   if (!checkAdmin(req.body?.code)) return res.status(403).json({ error: 'forbidden' });
+  // R4/L1 : plafond du nombre d'événements
+  if (Object.keys(state.events).length >= MAX_EVENTS) {
+    return res.status(409).json({ error: `Limite atteinte : ${MAX_EVENTS} événements maximum. Supprimez-en avant d'en créer un nouveau.` });
+  }
   const id = crypto.randomBytes(3).toString('hex');
   const name = (typeof req.body.name === 'string' ? req.body.name.trim() : '').slice(0, 40) || 'Nouvel événement';
   state.events[id] = makeEvent(id, name);
@@ -278,6 +289,10 @@ app.post('/api/groups', (req, res) => {
   if (!checkAdmin(code)) return res.status(403).json({ error: 'forbidden' });
   const evt = state.events[e];
   if (!evt) return res.status(404).json({ error: 'event not found' });
+  // R4/L1 : plafond du nombre de groupes par événement
+  if (Object.keys(evt.groups).length >= MAX_GROUPS) {
+    return res.status(409).json({ error: `Limite atteinte : ${MAX_GROUPS} groupes maximum par événement.` });
+  }
   const id = crypto.randomBytes(3).toString('hex');
   const groupName = (typeof name === 'string' ? name.trim() : '').slice(0, 40) || 'Nouveau groupe';
   evt.groups[id] = makeGroup(id, groupName);
