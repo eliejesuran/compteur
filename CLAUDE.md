@@ -75,6 +75,8 @@ Backoff reconnexion : 1s→2s→4s→…→30s, reset sur succès ou switch even
 | U4 | ✅ **FAIT** Grâce déco op 30s | `recentlyDisconnected Map` server.js + `_recentlyDisc` event.js · retrait broadcast après 30s via setTimeout |
 | U14 | Spinner file d'attente | Spinner CSS sur badge queue `index.html` pendant flush |
 | U15 | Remonter les Boutons + et -  pour mieux voir |  |
+| U16 | ✅ **FAIT** Saisie manuelle du lien hors ligne | Bouton « Saisir le lien manuellement » + overlay `#link-overlay` (copié-collé) affichés quand URL invalide / event introuvable (4004) ; `parseEventURL` accepte URL complète, relative ou query seule → reste dans l'app |
+| U17 | ✅ **FAIT** Lien QR admin cliquable | `#qr-url` rendu en `<a target="_blank" rel="noopener">` au lieu de texte brut |
 | T1 | ✅ **FAIT** Cache QR EventDO | `this._qrCache={url,qr}` dans EventDO · invalidé si URL change · QR généré dans event.js (import QRCode) · route index.js délègue au DO |
 
 ## Bugs & Lacunes de robustesse
