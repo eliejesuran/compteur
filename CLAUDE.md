@@ -62,6 +62,9 @@ Backoff reco 1s→…→30s, reset sur succès/switch. `wsReconnectNow()` sur `v
 - **Persistance DO seenOps** : `_load()` lit `seen`, `_save()` persiste `[..._seen].slice(-2500)`. Local : `buildSnapshot`/`applySnapshot` sérialisent seenOps (max 5000/event) ; `scheduleSave()` debounce 500ms + `setInterval(flushSave,30000)`.
 - **`run_worker_first: true` OBLIGATOIRE** (wrangler.jsonc) : sinon Workers Assets sert `index.html` (200) avant le Worker → l'upgrade WS reçoit du HTML au lieu du 101 → opérateurs hors ligne en prod. Vérif : `curl -i -H "Upgrade: websocket" …/?e=x&g=x` → 404 DO ou 101, jamais du HTML.
 - **Dot online op = état WS uniquement** : `flush()` ne touche pas `setOnline`.
+- **Dernier état affiché (B7)** : localStorage `op_last_state={e,g,count,groupCount,groupName,capacity}`, écrit par `persistDisplay()` (dans setCount/setGroupCount). Restauré au boot AVANT le fetch → pas de « – » hors ligne. Boot `/api/state` : n'écrase que si `r.ok && typeof total==='number'` (sinon 404→undefined→NaN écrasait l'état restauré).
+- **Heartbeat serveur (N9)** : server.js ping WS-frame toutes les 30s (`ws.isAlive`/`on('pong')`), `terminate()` les sockets sans pong → purge des TCP morts. Interval dans le bloc `require.main` (pas en test). Distinct du ping applicatif JSON client→serveur.
+- **Hello borné (N8)** : 1 hello/s/WS (`_lastHello`/`a.lastHello`) + rediffusion clients seulement si le nom change. server.js ET event.js.
 - **Handlers hibernation DO** (`webSocketMessage/Close/Error`) : toujours `await this._load()` avant `this._s` (null après hibernation).
 - **Suppression event (N4)** : `/terminate` AVANT le garde archived→404 ; ferme WS 4004 + `deleteAll()` + `deleteAlarm()` + reset mémoire ; `index.js` n'efface le registre que si purge OK (502 sinon, terminate idempotent).
 - **Grâce déco (U4)** : `recentlyDisconnected`/`_recentlyDisc` — op visible 30s après déco, retrait via setTimeout, clé `${eventId}:${name}`.
@@ -75,8 +78,8 @@ Backoff reco 1s→…→30s, reset sur succès/switch. `wsReconnectNow()` sur `v
 | ID | Titre | Approche |
 |---|---|---|
 | U2 | Bouton +1 plus grand en hauteur | `min-height:30dvh` sur `pointer:coarse` |
-| U14 | Spinner file d'attente | Spinner CSS sur badge queue pendant flush |
-| U15 | Remonter +/− pour mieux voir | — |
+| U14 | **NON NECESSAIRE** Spinner file d'attente | Spinner CSS sur badge queue pendant flush |
+| U15 | **NON NECESSAIRE** Remonter +/− pour mieux voir | — |
 
 Faits : U1 (Wake Lock), U3 (lien admin → bandeau), U4 (grâce déco), U16 (saisie lien manuelle), U17 (QR admin cliquable), U18 (hauteur viewport), U19 (persistance lien), U20 (évolution par groupe stats), U21 (logo bandeau), T1 (cache QR).
 
@@ -84,10 +87,9 @@ Faits : U1 (Wake Lock), U3 (lien admin → bandeau), U4 (grâce déco), U16 (sai
 > Revue 2026-06-11 / 06-12. Items corrigés → voir l'historique git ; ci-dessous = **ouvert**.
 
 **Fonctionnels**
-- **B7** `index.html` — déconnecté d'internet + app quittée : rebranchement peu cohérent (atténué par U19).
-- **N5** `server.js`+`event.js` — archivage ne ferme pas les WS : op garde son dot vert, `/api/count`→404, queue jette les ops (4xx) **silencieusement** → perte de comptage. Fix : fermer WS 4004 quand `archived===true`.
 - **N6** `index.html` — `crypto.randomUUID()` exige un contexte sécurisé : en LAN http (fallback sans internet) `tap()` lève TypeError → **aucun comptage**. Fix : fallback `Date.now()+Math.random()`.
-- **N7** `admin.html` — `esc()` n'échappe ni `'` ni `"` : nom avec apostrophe (« L'entrée ») casse les `onclick` → boutons inopérants + injection JS (admin-only). Fix : `'`→`&#39;` `"`→`&quot;`.
+
+Corrigés (voir git) : **B7** (op_last_state, cf. invariants), **N5** (archive ferme WS 4004), **N7** (esc + renameGroup sans interpolation du nom), **N8** (hello 1/s/WS + broadcast si nom change), **N9** (ping serveur→client), **N10** (timeout fan-out).
 
 **Sécurité**
 - **S1** Code admin en query param GET (logs, historique, Referer). → `Authorization: Bearer`, query en fallback.
@@ -97,20 +99,17 @@ Faits : U1 (Wake Lock), U3 (lien admin → bandeau), U4 (grâce déco), U16 (sai
 - **S6** `/api/qr` local construit l'URL depuis `Host` non validé. → whitelist IPs locales + localhost (faible, admin auth).
 
 **Limites / robustesse**
-- **N8** `webSocketMessage` sans rate-limit : spam `hello` amplifie `_broadcastClients`. → borner 1 hello/s/WS.
-- **N9** `server.js` n'envoie pas de ping s→c : sockets TCP morts restent dans `wsClients` jusqu'au timeout OS (faux « connectés »).
-- **N10** Fan-out `/api/events` sans timeout par DO : un DO lent bloque la liste admin. → `AbortSignal.timeout(3000)` par stub.
 - **R1** (cœur corrigé) Optionnel : parser `Retry-After` pour backoff > 2s.
 - **R2** Queue localStorage non plafonnée (op hors ligne des heures). → plafond 5000 ops + bandeau « synchronisation requise ».
 - **R3** `/api/qr` Express async sans try/catch → rejet non géré si QRCode échoue. → try/catch → 500 JSON.
 
 ## Dev
 ```bash
-npm start          # local (affiche IPs + code admin)
-npm run cf:dev     # wrangler dev (DO simulés)
-npm run deploy     # CF — nécessite wrangler login + plan Paid (DO)
-npm test           # tous (local node:test + worker vitest-pool-workers)
-npm run test:local # serveur Express (tests/server.test.js)
-npm run test:worker# Worker CF (tests/worker/*.test.js, runtime workerd)
+npm start           # local (affiche IPs + code admin)
+npm run cf:dev      # wrangler dev (DO simulés)
+npm run deploy      # CF — nécessite wrangler login + plan Paid (DO)
+npm test            # tous (local node:test + worker vitest-pool-workers)
+npm run test:local  # serveur Express (tests/server.test.js)
+npm run test:worker # Worker CF (tests/worker/*.test.js, runtime workerd)
 ```
 Code admin par défaut : `admin123`. Tests Worker : RegistryDO singleton, cache mémoire persiste entre tests (isolatedStorage = storage seul) → scoper les assertions par id.

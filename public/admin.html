@@ -325,7 +325,8 @@ function fetchT(url, opts, ms = 6000) {
 }
 
 function esc(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                  .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
 // ── Login ──
@@ -438,7 +439,7 @@ function renderGroupTable(groups, total, cap) {
       <td class="g-count">${g.count}</td>
       <td class="g-pct">${pct}%</td>
       <td class="g-acts">
-        ${isAdmin ? `<button class="secondary" onclick="renameGroup('${esc(g.id)}','${esc(g.name)}')">✎</button>` : ''}
+        ${isAdmin ? `<button class="secondary" onclick="renameGroup('${esc(g.id)}')">✎</button>` : ''}
         ${canDel ? `<button class="danger" onclick="deleteGroup('${esc(g.id)}')">×</button>` : ''}
       </td>
     </tr>`;
@@ -623,7 +624,10 @@ async function createGroup() {
   }
 }
 
-async function renameGroup(groupId, currentName) {
+async function renameGroup(groupId) {
+  // N7 : nom récupéré depuis l'état (pas interpolé dans l'onclick) → robuste aux apostrophes/guillemets.
+  const evt = events.find(e => e.id === currentEvent);
+  const currentName = evt?.groups?.find(g => g.id === groupId)?.name ?? '';
   const name = prompt('Nouveau nom :', currentName);
   if (!name?.trim() || name.trim() === currentName) return;
   await fetchT('/api/admin/config', {

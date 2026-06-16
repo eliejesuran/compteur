@@ -412,7 +412,14 @@ app.post('/api/admin/config', (req, res) => {
       // Event-level
       if (Number.isFinite(capacity) && capacity > 0) evt.capacity = Math.round(capacity);
       if (typeof name === 'string' && name.trim()) evt.name = name.trim().slice(0, 40);
-      if (archived === true) evt.archived = true;
+      if (archived === true) {
+        evt.archived = true;
+        // N5 : fermer les WS ouverts (4004) → l'opérateur voit "hors ligne" au lieu de
+        // continuer à taper dans le vide (count → 404 → ops jetées silencieusement).
+        for (const [ws, c] of wsClients) {
+          if (c.eventId === e && ws.readyState < 2) ws.close(4004, 'Event archived');
+        }
+      }
       if (archived === false) evt.archived = false;
       if (reset === true) {
         for (const grp of Object.values(evt.groups)) {
@@ -501,6 +508,11 @@ wss.on('connection', (ws, req) => {
 
   wsClients.set(ws, { name: null, connectedAt: Date.now(), eventId, groupId });
 
+  // N9 : heartbeat serveur→client (frames WS ping/pong). Le navigateur répond
+  // automatiquement au ping → on détecte les sockets TCP morts (cf. interval plus bas).
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
+
   ws.send(JSON.stringify({
     type: 'init',
     total: eventTotal(evt),
@@ -529,11 +541,14 @@ wss.on('connection', (ws, req) => {
         const name = msg.name.trim().slice(0, 32);
         if (!name) return;
         const client = wsClients.get(ws);
+        // N8 : borne à 1 hello/s/WS + ne rediffuse que si le nom change (anti-amplification).
+        const now = Date.now();
+        if (now - (client._lastHello || 0) < 1000) return;
+        client._lastHello = now;
         const prevName = client.name;
+        if (prevName === name) return;
         client.name = name;
-        if (!prevName || prevName !== name) {
-          logClients(prevName ? `renommé(e) → ${name}` : 'connecté(e)', name, eventId, groupId);
-        }
+        logClients(prevName ? `renommé(e) → ${name}` : 'connecté(e)', name, eventId, groupId);
         broadcastClientsForEvent(eventId);
       }
     } catch {}
@@ -589,6 +604,16 @@ if (require.main === module) {
 
   // Record history (total + détail par groupe) every 30s
   setInterval(recordHistory, 30000);
+
+  // N9 : ping serveur→client toutes les 30s ; termine les sockets sans pong (TCP morts)
+  const wsHeartbeat = setInterval(() => {
+    for (const ws of wss.clients) {
+      if (ws.isAlive === false) { ws.terminate(); continue; }
+      ws.isAlive = false;
+      try { ws.ping(); } catch {}
+    }
+  }, 30000);
+  wss.on('close', () => clearInterval(wsHeartbeat));
 
   server.listen(PORT, '0.0.0.0', () => {
     const ips = getLocalIPs();

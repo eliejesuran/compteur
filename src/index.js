@@ -113,7 +113,8 @@ async function handleAPI(request, env, url, path) {
     // Fan-out vers chaque EventDO pour les totaux en temps réel
     const events = await Promise.all(meta.map(async (m) => {
       try {
-        const r   = await eventStub(env, m.id).fetch(iReq('/summary'));
+        // N10 : timeout par DO → un DO lent ne bloque pas toute la liste admin.
+        const r   = await eventStub(env, m.id).fetch(iReq('/summary'), { signal: AbortSignal.timeout(3000) });
         const { total, groups } = await r.json();
         return { ...m, total, groups };
       } catch {

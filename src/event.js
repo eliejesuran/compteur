@@ -337,7 +337,11 @@ export class EventDO extends DurableObject {
       } else {
         if (Number.isFinite(capacity) && capacity > 0) this._s.capacity = Math.round(capacity);
         if (typeof name === 'string' && name.trim()) this._s.name = name.trim().slice(0, 40);
-        if (archived === true)  this._s.archived = true;
+        if (archived === true) {
+          this._s.archived = true;
+          // N5 : fermer les WS (4004) → l'opérateur passe hors ligne au lieu de taper dans le vide.
+          for (const ws of this.ctx.getWebSockets()) { try { ws.close(4004, 'Event archived'); } catch {} }
+        }
         if (archived === false) {
           const wasArchived = this._s.archived;
           this._s.archived = false;
@@ -458,9 +462,14 @@ export class EventDO extends DurableObject {
         const name = msg.name.trim().slice(0, 32);
         if (!name) return;
         const a = ws.deserializeAttachment() ?? {};
+        // N8 : borne à 1 hello/s/WS + ne rediffuse que si le nom change (anti-amplification).
+        const now = Date.now();
+        if (now - (a.lastHello || 0) < 1000) return;
+        const changed = a.name !== name;
+        a.lastHello = now;
         a.name = name;
         ws.serializeAttachment(a);
-        this._broadcastClients();
+        if (changed) this._broadcastClients();
       }
     } catch {}
   }

@@ -817,6 +817,22 @@ describe('deleteEvent — fermeture WS (B5)', () => {
   });
 });
 
+describe('archivage — fermeture WS (N5)', () => {
+  test('WS client reçoit close 4004 quand l\'event est archivé', (_t, done) => {
+    const ws = new WebSocket(wsUrl());
+    ws.once('message', () => {
+      request(server).post('/api/admin/config')
+        .send({ code: 'admin123', e: EVT_ID, archived: true })
+        .end(() => {});
+      ws.on('close', (code) => {
+        assert.equal(code, 4004, 'doit fermer avec code 4004');
+        done();
+      });
+    });
+    ws.on('error', done);
+  });
+});
+
 // ── Persistance seenOps — C1 ─────────────────────────────────────────────────
 
 describe('Persistance seenOps (C1)', () => {

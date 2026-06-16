@@ -663,6 +663,7 @@ function setCount(n, cap) {
   else if (pct >= 0.8) body.classList.add('state-warn');
 
   triggerAlert(pct >= 1);
+  persistDisplay();
 }
 
 function setGroupCount(c, name) {
@@ -671,6 +672,18 @@ function setGroupCount(c, name) {
   const el = document.getElementById('group-sub');
   el.textContent = `dont ${c} en ${name}`;
   el.style.display = 'block';
+  persistDisplay();
+}
+
+// B7 : mémorise le dernier état affiché (scopé e/g) → au rebranchement (même hors ligne,
+// PWA relancée), on réaffiche ce total au lieu de « – ». Écrasé par /api/state + WS init.
+function persistDisplay() {
+  if (!EVENT_ID || !GROUP_ID) return;
+  try {
+    localStorage.setItem('op_last_state', JSON.stringify({
+      e: EVENT_ID, g: GROUP_ID, count, groupCount, groupName, capacity,
+    }));
+  } catch {}
 }
 
 function triggerAlert(active) {
@@ -1012,11 +1025,23 @@ initScanBtn();
 
 // Boot: fetch initial state then open WebSocket
 if (EVENT_ID && GROUP_ID) {
+  // B7 : restaure le dernier état connu AVANT le fetch → pas de « – » si hors ligne.
+  try {
+    const s = JSON.parse(localStorage.getItem('op_last_state') || 'null');
+    if (s && s.e === EVENT_ID && s.g === GROUP_ID) {
+      capacity = s.capacity ?? capacity;
+      setGroupCount(s.groupCount ?? 0, s.groupName ?? '');
+      setCount(s.count ?? 0, capacity);
+    }
+  } catch {}
   fetchWithTimeout(`/api/state?e=${encodeURIComponent(EVENT_ID)}&g=${encodeURIComponent(GROUP_ID)}`)
-    .then(r => r.json())
+    .then(r => r.ok ? r.json() : null)
     .then(d => {
-      setCount(d.total, d.capacity);
-      setGroupCount(d.groupCount, d.groupName);
+      // 404 / hors ligne → on garde l'état restauré (B7) au lieu d'écraser avec undefined→NaN.
+      if (d && typeof d.total === 'number') {
+        setCount(d.total, d.capacity);
+        setGroupCount(d.groupCount, d.groupName);
+      }
     })
     .catch(() => {})
     .finally(connect);
