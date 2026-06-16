@@ -86,14 +86,11 @@ Faits : U1 (Wake Lock), U3 (lien admin → bandeau), U4 (grâce déco), U16 (sai
 ## Bugs ouverts & robustesse
 > Revue 2026-06-11 / 06-12. Items corrigés → voir l'historique git ; ci-dessous = **ouvert**.
 
-**Fonctionnels**
-- **N6** `index.html` — `crypto.randomUUID()` exige un contexte sécurisé : en LAN http (fallback sans internet) `tap()` lève TypeError → **aucun comptage**. Fix : fallback `Date.now()+Math.random()`.
-
-Corrigés (voir git) : **B7** (op_last_state, cf. invariants), **N5** (archive ferme WS 4004), **N7** (esc + renameGroup sans interpolation du nom), **N8** (hello 1/s/WS + broadcast si nom change), **N9** (ping serveur→client), **N10** (timeout fan-out).
+**Fonctionnels** — tous corrigés (voir git) : **B7** (op_last_state, cf. invariants), **N5** (archive ferme WS 4004), **N6** (`genUUID()` : fallback si `crypto.randomUUID` absent en LAN http), **N7** (esc + renameGroup sans interpolation du nom), **N8** (hello 1/s/WS + broadcast si nom change), **N9** (ping serveur→client), **N10** (timeout fan-out).
 
 **Sécurité**
 - **S1** Code admin en query param GET (logs, historique, Referer). → `Authorization: Bearer`, query en fallback.
-- **S2** Pas de SRI sur les CDN — jsQR (index), SheetJS (admin), Chart.js (stats). → `integrity` + `crossorigin`.
+- **S2** ✅ SRI + `crossorigin="anonymous"` sur les 3 CDN : jsQR@1.4.0 (index), SheetJS@0.20.3 (admin), Chart.js **épinglé 4.4.1** (stats, avant `@4` flottant). Hash sha384 recalculé si bump de version.
 - **S4/S7** Event ID 6 hex (~16M) brute-forçable ; `/api/state`+`/api/history` non auth pour IDs connus. → 8-10 hex à la création ; option rate-limit `/api/state`.
 - **S5** Pas de check `Origin` sur upgrade WS (CSWSH) : site tiers peut lire totaux+prénoms si event ID connu. → refuser si `Origin` présent ≠ host (server.js + index.js).
 - **S6** `/api/qr` local construit l'URL depuis `Host` non validé. → whitelist IPs locales + localhost (faible, admin auth).
