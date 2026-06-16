@@ -77,7 +77,8 @@ Backoff reconnexion : 1s→2s→4s→…→30s, reset sur succès ou switch even
 |---|---|---|
 | U1 | ✅ **FAIT** Wake Lock | `navigator.wakeLock.request('screen')` + réacquisition sur `visibilitychange`, fallback silencieux |
 | U2 | Bouton +1 plus grand en hauteur | `min-height:30dvh` sur `pointer:coarse` |
-| U3 | ✅ **FAIT** Lien admin discret | `<a #admin-link>` fixe bas-droite `opacity:0.28`, engrenage SVG → `/admin.html` |
+| U3 | ✅ **FAIT** Lien admin discret | `<a #admin-link>` engrenage SVG `opacity:0.28` → `/admin.html`. **Déplacé** du fixe bas-droite vers le **bandeau** (haut-droite, après `#scan-btn`) — flex item, n'agrandit pas le bandeau (52px, borné par `#scan-btn` 32px) |
+| U21 | ✅ **FAIT** Logo bandeau | `public/logo.png` (clair) + `public/logo_white.png` (sombre), copiés depuis `logo/`. 2 `<img.app-logo>` haut-gauche du `#statusbar`, switch via `@media (prefers-color-scheme)`. `height:22px` → bandeau inchangé (52px) |
 | U4 | ✅ **FAIT** Grâce déco op 30s | `recentlyDisconnected Map` server.js + `_recentlyDisc` event.js · retrait broadcast après 30s via setTimeout |
 | U14 | Spinner file d'attente | Spinner CSS sur badge queue `index.html` pendant flush |
 | U15 | Remonter les Boutons + et -  pour mieux voir |  |

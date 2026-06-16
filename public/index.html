@@ -76,6 +76,18 @@
       flex-shrink: 0;
     }
 
+    /* Logo bandeau (haut-gauche) — height bornée pour ne pas grandir le bandeau */
+    .app-logo {
+      height: 22px; width: auto;
+      display: block; flex-shrink: 0;
+      margin-right: 2px;
+    }
+    #logo-light { display: none; }
+    @media (prefers-color-scheme: light) {
+      #logo-dark  { display: none; }
+      #logo-light { display: block; }
+    }
+
     #dot {
       width: 9px; height: 9px;
       border-radius: 50%;
@@ -423,16 +435,14 @@
     }
 
     /* ── Lien admin discret — U3 ── */
+    /* U3/U15 : lien admin discret dans le bandeau (haut-droite) */
     #admin-link {
-      position: fixed;
-      bottom: max(14px, env(safe-area-inset-bottom) + 4px);
-      right: 14px;
       width: 28px; height: 28px;
       display: flex; align-items: center; justify-content: center;
       color: var(--muted);
       opacity: 0.28;
       text-decoration: none;
-      z-index: 10;
+      flex-shrink: 0;
       touch-action: manipulation;
     }
     #admin-link:active { opacity: 0.7; }
@@ -460,6 +470,8 @@
 <div id="bxl-bg" aria-hidden="true"><pre id="bxl-art"></pre></div>
 
 <div id="statusbar">
+  <img id="logo-dark"  class="app-logo" src="/logo_white.png" alt="logo" aria-hidden="true">
+  <img id="logo-light" class="app-logo" src="/logo.png"       alt="logo" aria-hidden="true">
   <div id="dot"></div>
   <span id="status-text">Connexion…</span>
   <button id="op-name-btn" onclick="editName()"></button>
@@ -473,6 +485,12 @@
       <rect x="7" y="14" width="3" height="3"/><rect x="14" y="14" width="3" height="3"/>
     </svg>
   </button>
+  <a id="admin-link" href="/admin.html" title="Administration" aria-label="Administration">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="3"/>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+    </svg>
+  </a>
 </div>
 
 <!-- Scanner overlay -->
@@ -503,13 +521,6 @@
 </div>
 
 <div id="alert-overlay"></div>
-
-<a id="admin-link" href="/admin.html" title="Administration" aria-label="Administration">
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-    <circle cx="12" cy="12" r="3"/>
-    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-  </svg>
-</a>
 
 <!-- Overlay saisie manuelle du lien — copié-collé quand l'URL est invalide -->
 <div id="link-overlay">
