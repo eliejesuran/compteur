@@ -6,7 +6,7 @@ const request = require('supertest');
 const WebSocket = require('ws');
 const { randomUUID } = require('node:crypto');
 
-const { server, state, eventSeenOps, trimSeenOps, wsClients, recentlyDisconnected, rlBuckets, buildSnapshot, applySnapshot, recordHistory } = require('../server');
+const { server, state, eventSeenOps, trimSeenOps, wsClients, recentlyDisconnected, rlBuckets, buildSnapshot, applySnapshot, recordHistory, recordHistoryCoarse } = require('../server');
 
 const ARCHIVED_EVT_ID = 'archevt';
 
@@ -1093,5 +1093,39 @@ describe('Historique par groupe', () => {
     for (let i = 0; i < 2880; i++) e.history.push({ t: i, c: 0, g: {} });
     recordHistory();
     assert.equal(e.history.length, 2880, 'shift maintient le plafond');
+  });
+});
+
+describe('Historique grossier (rétention 60j)', () => {
+  test('recordHistoryCoarse enregistre {t,c} (total seul, sans g)', () => {
+    grp().count = 7;
+    recordHistoryCoarse();
+    const c = evt().historyCoarse.at(-1);
+    assert.equal(c.c, 7);
+    assert.equal(c.g, undefined, 'pas de détail par groupe');
+    assert.ok(typeof c.t === 'number');
+  });
+
+  test('/api/history renvoie historyCoarse', async () => {
+    grp().count = 3;
+    recordHistoryCoarse();
+    const res = await request(server).get(`/api/history?code=admin123&e=${EVT_ID}`);
+    assert.equal(res.status, 200);
+    assert.ok(Array.isArray(res.body.historyCoarse));
+    assert.equal(res.body.historyCoarse.at(-1).c, 3);
+  });
+
+  test('plafonne à MAX_HISTORY_COARSE (2880)', () => {
+    const e = evt();
+    e.historyCoarse = [];
+    for (let i = 0; i < 2880; i++) e.historyCoarse.push({ t: i, c: 0 });
+    recordHistoryCoarse();
+    assert.equal(e.historyCoarse.length, 2880, 'shift maintient le plafond');
+  });
+
+  test('reset-counts ajoute un point grossier à 0', async () => {
+    grp().count = 10;
+    await request(server).post('/api/reset-counts').send({ code: 'admin123', e: EVT_ID });
+    assert.equal(evt().historyCoarse.at(-1).c, 0);
   });
 });

@@ -3,7 +3,10 @@ import QRCode from 'qrcode';
 
 const MAX_GROUPS = 20;  // R4/L1 : groupes max par événement
 const MAX_OPS    = 100; // R4/L2 : opérateurs distincts trackés (opStats) par groupe
-const MAX_HISTORY = 2880; // points d'historique max (24h @ 30s) — aligné local/cloud
+const MAX_HISTORY = 2880; // points d'historique FIN max (24h @ 30s) — aligné local/cloud
+// Série GROSSIÈRE (total seul) : 1 pt / 30 min, 2880 pts = 60 jours (clé DO séparée).
+const MAX_HISTORY_COARSE = 2880;
+const COARSE_INTERVAL_MS  = 30 * 60 * 1000; // 30 min
 
 // L3 : token bucket par IP. CAPACITY = burst max d'une salve (réduit de 2000 → 300
 // pour limiter l'injection en rafale) ; RATE = débit soutenu rechargé (tokens/s).
@@ -32,7 +35,8 @@ export class EventDO extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
     this._s            = null;
-    this._hist         = null;      // historique [{t,c,g}] — clé storage séparée (écrite par l'alarme)
+    this._hist         = null;      // historique fin [{t,c,g}] — clé storage séparée (écrite par l'alarme)
+    this._histCoarse   = null;      // historique grossier [{t,c}] — clé storage séparée (30 min)
     this._seen         = new Set();
     this._rl           = new Map(); // T3: token-bucket rate limiter — ip → {tokens, lastMs}
     this._recentlyDisc = new Map(); // U4: name → {disconnectedAt, groupId}
@@ -60,13 +64,15 @@ export class EventDO extends DurableObject {
 
   async _load() {
     if (this._s !== null) return;
-    const [s, seen, hist] = await Promise.all([
+    const [s, seen, hist, histCoarse] = await Promise.all([
       this.ctx.storage.get('state'),
       this.ctx.storage.get('seen'),
       this.ctx.storage.get('history'),
+      this.ctx.storage.get('historyCoarse'),
     ]);
-    this._s    = s    ?? null;
-    this._seen = new Set(seen ?? []);
+    this._s          = s    ?? null;
+    this._seen       = new Set(seen ?? []);
+    this._histCoarse = histCoarse ?? [];
     // Historique dans une clé séparée (écrite seulement par l'alarme, 30 s) → _save()
     // par comptage reste léger. Migration des events existants : historique inline dans `state`.
     if (this._s && Array.isArray(this._s.history)) {
@@ -87,6 +93,10 @@ export class EventDO extends DurableObject {
 
   async _saveHistory() {
     await this.ctx.storage.put('history', this._hist);
+  }
+
+  async _saveHistoryCoarse() {
+    await this.ctx.storage.put('historyCoarse', this._histCoarse);
   }
 
   // Point d'historique : total + détail du count par groupe (g[groupId])
@@ -179,6 +189,7 @@ export class EventDO extends DurableObject {
           groups:    { [groupId]: makeGroup(groupId, 'Principal') },
         };
         this._hist = [];
+        this._histCoarse = [];
         await this._save();
         await this.ctx.storage.setAlarm(Date.now() + 30_000);
       }
@@ -202,6 +213,7 @@ export class EventDO extends DurableObject {
       await this.ctx.storage.deleteAll();
       this._s = null;
       this._hist = [];
+      this._histCoarse = [];
       this._seen = new Set();
       this._recentlyDisc.clear();
       this._rl.clear();
@@ -264,7 +276,9 @@ export class EventDO extends DurableObject {
       for (const grp of Object.values(this._s.groups)) grp.count = 0;
       this._hist.push(this._historyPoint());
       if (this._hist.length > MAX_HISTORY) this._hist.shift();
-      await Promise.all([this._save(), this._saveHistory()]);
+      this._histCoarse.push({ t: Date.now(), c: 0 });
+      if (this._histCoarse.length > MAX_HISTORY_COARSE) this._histCoarse.shift();
+      await Promise.all([this._save(), this._saveHistory(), this._saveHistoryCoarse()]);
       this._broadcast(0);
       return Response.json({ ok: true });
     }
@@ -310,7 +324,8 @@ export class EventDO extends DurableObject {
       const totalIn  = Object.values(this._s.groups).reduce((s, g) => s + g.totalIn,  0);
       const totalOut = Object.values(this._s.groups).reduce((s, g) => s + g.totalOut, 0);
       return Response.json({
-        history:  this._hist,
+        history:       this._hist,
+        historyCoarse: this._histCoarse,
         total:    this._total(),
         capacity: this._s.capacity,
         totalIn, totalOut,
@@ -352,7 +367,9 @@ export class EventDO extends DurableObject {
             grp.count = 0; grp.totalIn = 0; grp.totalOut = 0; grp.opStats = {};
           }
           this._hist = [];
+          this._histCoarse = [];
           await this._saveHistory();
+          await this._saveHistoryCoarse();
           this._seen.clear();
         }
       }
@@ -498,9 +515,19 @@ export class EventDO extends DurableObject {
     await this._load();
     if (!this._s || this._s.archived) return; // ne pas replanifier si archivé
 
+    const now = Date.now();
     this._hist.push(this._historyPoint());
     if (this._hist.length > MAX_HISTORY) this._hist.shift();
     await this._saveHistory();
-    await this.ctx.storage.setAlarm(Date.now() + 30_000);
+
+    // Série grossière (total seul) toutes les ~30 min (alarme cadencée à 30 s).
+    const lastC = this._histCoarse[this._histCoarse.length - 1];
+    if (!lastC || now - lastC.t >= COARSE_INTERVAL_MS - 5_000) {
+      this._histCoarse.push({ t: now, c: this._total() });
+      if (this._histCoarse.length > MAX_HISTORY_COARSE) this._histCoarse.shift();
+      await this._saveHistoryCoarse();
+    }
+
+    await this.ctx.storage.setAlarm(now + 30_000);
   }
 }

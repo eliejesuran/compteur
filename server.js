@@ -13,7 +13,11 @@ const STATE_FILE = path.join(__dirname, 'state.json');
 const MAX_EVENTS = 50;   // événements au total (archivés inclus)
 const MAX_GROUPS = 20;   // groupes par événement
 const MAX_OPS    = 100;  // opérateurs distincts (opStats) par groupe
-const MAX_HISTORY = 2880; // points d'historique max (24h @ 30s) — aligné local/cloud
+const MAX_HISTORY = 2880; // points d'historique FIN max (24h @ 30s) — aligné local/cloud
+// Série GROSSIÈRE (total seul) : 1 pt / 30 min, 2880 pts = 60 jours. Pour les vues longues
+// (7j/30j/début) sans exploser le stockage (2 Mo/clé cloud). Aligné local/cloud.
+const MAX_HISTORY_COARSE = 2880;
+const COARSE_INTERVAL_MS  = 30 * 60 * 1000; // 30 min
 
 // S3 : rate-limit local (token bucket par IP) — mêmes valeurs que le Worker CF (L3)
 const RL_CAPACITY = 300; // burst max d'une salve
@@ -63,6 +67,7 @@ function makeEvent(id, name) {
     id, name,
     capacity: 100,
     history: [],
+    historyCoarse: [],
     createdAt: Date.now(),
     archived: false,
     groups: { [gId]: makeGroup(gId, 'Principal') },
@@ -90,6 +95,16 @@ function recordHistory() {
     if (evt.archived) continue;
     evt.history.push(historyPoint(evt));
     if (evt.history.length > MAX_HISTORY) evt.history.shift();
+  }
+}
+
+// Série grossière (total seul) — échantillonnée toutes les 30 min
+function recordHistoryCoarse() {
+  for (const evt of Object.values(state.events)) {
+    if (evt.archived) continue;
+    if (!evt.historyCoarse) evt.historyCoarse = [];
+    evt.historyCoarse.push({ t: Date.now(), c: eventTotal(evt) });
+    if (evt.historyCoarse.length > MAX_HISTORY_COARSE) evt.historyCoarse.shift();
   }
 }
 
@@ -358,6 +373,7 @@ app.get('/api/history', (req, res) => {
   const totalOut = Object.values(evt.groups).reduce((s, g) => s + g.totalOut, 0);
   res.json({
     history: evt.history,
+    historyCoarse: evt.historyCoarse ?? [],
     total: eventTotal(evt),
     capacity: evt.capacity,
     totalIn, totalOut,
@@ -426,6 +442,7 @@ app.post('/api/admin/config', (req, res) => {
           grp.count = 0; grp.totalIn = 0; grp.totalOut = 0; grp.opStats = {};
         }
         evt.history = [];
+        evt.historyCoarse = [];
         const ops = eventSeenOps.get(e);
         if (ops) ops.clear();
         flushSave();
@@ -447,8 +464,11 @@ app.post('/api/reset-counts', (req, res) => {
   const evt = state.events[e];
   if (!evt || evt.archived) return res.status(404).json({ error: 'event not found' });
   for (const grp of Object.values(evt.groups)) grp.count = 0;
-  evt.history.push(historyPoint(evt)); // marque la remise à zéro dans l'historique
+  evt.history.push(historyPoint(evt)); // marque la remise à zéro dans l'historique fin
   if (evt.history.length > MAX_HISTORY) evt.history.shift();
+  if (!evt.historyCoarse) evt.historyCoarse = [];
+  evt.historyCoarse.push({ t: Date.now(), c: 0 }); // … et dans la série grossière
+  if (evt.historyCoarse.length > MAX_HISTORY_COARSE) evt.historyCoarse.shift();
   broadcastEvent(e, 0);
   flushSave();
   res.json({ ok: true });
@@ -605,6 +625,9 @@ if (require.main === module) {
   // Record history (total + détail par groupe) every 30s
   setInterval(recordHistory, 30000);
 
+  // Série grossière (total seul) toutes les 30 min → rétention 60 jours
+  setInterval(recordHistoryCoarse, COARSE_INTERVAL_MS);
+
   // N9 : ping serveur→client toutes les 30s ; termine les sockets sans pong (TCP morts)
   const wsHeartbeat = setInterval(() => {
     for (const ws of wss.clients) {
@@ -629,4 +652,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, server, state, eventSeenOps, trimSeenOps, wsClients, recentlyDisconnected, rlBuckets, checkAdmin, checkAuth, buildSnapshot, applySnapshot, recordHistory };
+module.exports = { app, server, state, eventSeenOps, trimSeenOps, wsClients, recentlyDisconnected, rlBuckets, checkAdmin, checkAuth, buildSnapshot, applySnapshot, recordHistory, recordHistoryCoarse };

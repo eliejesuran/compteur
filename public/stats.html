@@ -88,9 +88,9 @@
     #logo-light { display: none; }
     @media (prefers-color-scheme: light) { #logo-dark { display: none; } #logo-light { display: block; } }
     /* Boutons de plage temporelle (évolution) */
-    .range-btns { display: flex; gap: 6px; margin-bottom: 12px; }
+    .range-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
     .range-btns button {
-      width: auto; flex: 1; padding: 6px 4px; font-size: 12px; font-weight: 600;
+      width: auto; flex: 1 1 auto; min-width: 52px; padding: 6px 4px; font-size: 12px; font-weight: 600;
       background: var(--bg); color: var(--muted); border: 1px solid var(--border);
     }
     .range-btns button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
@@ -141,6 +141,8 @@
       <button onclick="setRange(2,this)">2 h</button>
       <button onclick="setRange(6,this)">6 h</button>
       <button class="active" onclick="setRange(24,this)">24 h</button>
+      <button onclick="setRange(168,this)">7 j</button>
+      <button onclick="setRange(720,this)">30 j</button>
       <button onclick="setRange(0,this)">Début</button>
     </div>
     <div class="chart-wrap"><canvas id="chart"></canvas></div>
@@ -176,7 +178,8 @@ let wsReconnectDelay = 1000;
 let wsTimer = null;
 const GROUP_COLORS = ['#f59e0b','#22c55e','#a855f7','#f97316','#06b6d4','#ec4899'];
 let groupDatasets = {}; // groupId → dataset index
-let fullHistory = [];   // historique 30s complet (source de vérité)
+let fullHistory = [];       // historique fin 30s (24h) — vues 2h/6h/24h
+let fullHistoryCoarse = []; // historique grossier 30min (60j, total seul) — vues 7j/30j/début
 let lastTotal = 0;      // total live (WS)
 let lastGroups = [];    // groupes live (WS)
 let chartWindowH = 24;  // fenêtre affichée en heures ; 0 = depuis le début
@@ -241,7 +244,7 @@ async function switchEvent(id) {
   if (statsWs) { statsWs.close(); statsWs = null; }
   if (chart) { chart.destroy(); chart = null; }
   peak = 0; totalIn = 0; groupDatasets = {};
-  fullHistory = []; lastTotal = 0; lastGroups = [];
+  fullHistory = []; fullHistoryCoarse = []; lastTotal = 0; lastGroups = [];
   document.getElementById('s-peak').textContent = '–';
   document.getElementById('s-in').textContent   = '–';
   document.getElementById('s-count').textContent = '–';
@@ -264,7 +267,8 @@ async function loadEventStats(eventId) {
   document.getElementById('s-peak').textContent = peak;
   updateCount(data.total);
 
-  fullHistory = data.history || [];
+  fullHistory       = data.history || [];
+  fullHistoryCoarse = data.historyCoarse || [];
   lastTotal   = data.total;
   lastGroups  = data.groups || [];
   renderChart();
@@ -352,7 +356,11 @@ function chartPalette() {
 }
 
 function fmt(ts) {
-  return new Date(ts).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+  const d = new Date(ts);
+  // Vues longues (grossières) → date ; vues ≤24h (fines) → heure.
+  return (chartWindowH === 0 || chartWindowH > 24)
+    ? d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })
+    : d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
 }
 
 function buildChart(history, currentTotal, cap, groups) {
@@ -416,17 +424,22 @@ function buildChart(history, currentTotal, cap, groups) {
   });
 }
 
-// Historique filtré selon la fenêtre choisie (0 = depuis le début)
-function filteredHistory() {
-  if (!chartWindowH) return fullHistory;
-  const cutoff = Date.now() - chartWindowH * 3600_000;
-  return fullHistory.filter(h => h.t >= cutoff);
+// Choisit la série + filtre selon la fenêtre. ≤24h → fine (avec groupes) ;
+// au-delà / début → grossière 30min (total seul, pas de lignes par groupe).
+function selectedSeries() {
+  const fine = chartWindowH > 0 && chartWindowH <= 24;
+  const src  = fine ? fullHistory : fullHistoryCoarse;
+  const points = chartWindowH
+    ? src.filter(h => h.t >= Date.now() - chartWindowH * 3600_000)
+    : src;
+  return { points, withGroups: fine };
 }
 
-// (Re)construit le graphe à partir de l'historique 30s filtré + point « maintenant ».
+// (Re)construit le graphe à partir de la série filtrée + point « maintenant ».
 function renderChart() {
   if (chart) { chart.destroy(); chart = null; }
-  buildChart(filteredHistory(), lastTotal, capacity, lastGroups);
+  const { points, withGroups } = selectedSeries();
+  buildChart(points, lastTotal, capacity, withGroups ? lastGroups : []);
 }
 
 // Mise à jour live : on déplace le DERNIER point (« maintenant ») au lieu d'empiler
@@ -499,6 +512,7 @@ function connectWS(eventId) {
           totalIn = d.totalIn ?? totalIn;
           document.getElementById('s-in').textContent = totalIn;
           fullHistory = d.history || fullHistory;
+          fullHistoryCoarse = d.historyCoarse || fullHistoryCoarse;
           lastTotal = msg.total;
           renderChart();
         })
@@ -559,6 +573,7 @@ setInterval(() => {
     .then(r => r.json())
     .then(d => {
       fullHistory = d.history || fullHistory;
+      fullHistoryCoarse = d.historyCoarse || fullHistoryCoarse;
       if (!statsWs || statsWs.readyState !== 1) lastTotal = d.total; // pas de WS → total du fetch
       renderChart();
     })

@@ -252,6 +252,17 @@ describe('Historique par groupe (alarme)', () => {
     expect(last.g[g2]).toBe(5);
   });
 
+  it('l\'alarme alimente aussi la série grossière (total seul)', async () => {
+    const { id: e, groups } = await createEvent();
+    await count(e, groups[0].id, 5, 'c1');
+    const stub = env.EVENT.get(env.EVENT.idFromName(e));
+    await runInDurableObject(stub, (instance) => instance.alarm()); // 1ère alarme → 1 pt grossier
+    const hist = await (await SELF.fetch(`${BASE}/api/history?code=${ADMIN}&e=${e}`)).json();
+    expect(Array.isArray(hist.historyCoarse)).toBe(true);
+    expect(hist.historyCoarse.at(-1).c).toBe(5);
+    expect(hist.historyCoarse.at(-1).g).toBeUndefined();
+  });
+
   it('migre l\'ancien historique inline (state.history) vers la clé séparée', async () => {
     const { id: e } = await createEvent();
     const stub = env.EVENT.get(env.EVENT.idFromName(e));
