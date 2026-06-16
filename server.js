@@ -98,6 +98,30 @@ function recordHistory() {
   }
 }
 
+// Réduit l'historique fin [{t,c,g}] en série grossière [{t,c}] : 1 point / bucket de 30 min.
+function downsampleCoarse(fine) {
+  const out = [];
+  let lastBucket = null;
+  for (const h of fine) {
+    const bucket = Math.floor(h.t / COARSE_INTERVAL_MS);
+    const pt = { t: h.t, c: h.c };
+    if (bucket === lastBucket) out[out.length - 1] = pt;
+    else { out.push(pt); lastBucket = bucket; }
+  }
+  return out;
+}
+
+// Backfill : event sans série grossière (antérieur à la feature) → reconstruit depuis
+// l'historique fin (jusqu'à 24h dispo). Renvoie true si une reconstruction a eu lieu.
+function backfillCoarse(evt) {
+  if ((evt.historyCoarse?.length ?? 0) === 0 && evt.history?.length > 0) {
+    evt.historyCoarse = downsampleCoarse(evt.history).slice(-MAX_HISTORY_COARSE);
+    return true;
+  }
+  if (!evt.historyCoarse) evt.historyCoarse = [];
+  return false;
+}
+
 // Série grossière (total seul) — échantillonnée toutes les 30 min
 function recordHistoryCoarse() {
   for (const evt of Object.values(state.events)) {
@@ -369,6 +393,7 @@ app.get('/api/history', (req, res) => {
   if (!checkAuth(req.query.code)) return res.status(403).json({ error: 'forbidden' });
   const evt = state.events[req.query.e];
   if (!evt) return res.status(404).json({ error: 'event not found' });
+  if (backfillCoarse(evt)) scheduleSave(); // reconstruit la série grossière si absente
   const totalIn  = Object.values(evt.groups).reduce((s, g) => s + g.totalIn, 0);
   const totalOut = Object.values(evt.groups).reduce((s, g) => s + g.totalOut, 0);
   res.json({
@@ -618,6 +643,7 @@ if (require.main === module) {
   }
 
   for (const id of Object.keys(state.events)) ensureSeenOps(id);
+  for (const evt of Object.values(state.events)) backfillCoarse(evt); // série grossière des events existants
 
   // Sauvegarde de secours toutes les 30s (scheduleSave après chaque count couvre le cas normal)
   setInterval(flushSave, 30000);
@@ -652,4 +678,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, server, state, eventSeenOps, trimSeenOps, wsClients, recentlyDisconnected, rlBuckets, checkAdmin, checkAuth, buildSnapshot, applySnapshot, recordHistory, recordHistoryCoarse };
+module.exports = { app, server, state, eventSeenOps, trimSeenOps, wsClients, recentlyDisconnected, rlBuckets, checkAdmin, checkAuth, buildSnapshot, applySnapshot, recordHistory, recordHistoryCoarse, backfillCoarse };

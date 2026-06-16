@@ -1128,4 +1128,28 @@ describe('Historique grossier (rétention 60j)', () => {
     await request(server).post('/api/reset-counts').send({ code: 'admin123', e: EVT_ID });
     assert.equal(evt().historyCoarse.at(-1).c, 0);
   });
+
+  test('backfill : series grossière vide reconstruite depuis l\'historique fin', async () => {
+    const e = evt();
+    e.historyCoarse = [];
+    const base = Math.floor(Date.now() / (30 * 60 * 1000)) * 30 * 60 * 1000;
+    // 3 buckets de 30 min, 2 points par bucket → on garde le dernier de chaque
+    e.history = [
+      { t: base,                 c: 1, g: {} },
+      { t: base + 60_000,        c: 2, g: {} },   // même bucket → écrase
+      { t: base + 30*60_000,     c: 5, g: {} },   // bucket +1
+      { t: base + 60*60_000,     c: 9, g: {} },   // bucket +2
+    ];
+    const res = await request(server).get(`/api/history?code=admin123&e=${EVT_ID}`);
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body.historyCoarse.map(p => p.c), [2, 5, 9]);
+  });
+
+  test('backfill ne s\'exécute pas si la série grossière existe déjà', async () => {
+    const e = evt();
+    e.history = [{ t: 1, c: 7, g: {} }];
+    e.historyCoarse = [{ t: 1, c: 42 }];
+    await request(server).get(`/api/history?code=admin123&e=${EVT_ID}`);
+    assert.deepEqual(evt().historyCoarse.map(p => p.c), [42], 'inchangée');
+  });
 });

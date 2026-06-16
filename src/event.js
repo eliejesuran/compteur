@@ -25,6 +25,20 @@ function makeGroup(id, name) {
   return { id, name, count: 0, totalIn: 0, totalOut: 0, opStats: {} };
 }
 
+// Réduit l'historique fin [{t,c,g}] en série grossière [{t,c}] : 1 point / bucket de 30 min
+// (le dernier de chaque bucket). Sert au backfill des events antérieurs à la série grossière.
+function downsampleCoarse(fine) {
+  const out = [];
+  let lastBucket = null;
+  for (const h of fine) {
+    const bucket = Math.floor(h.t / COARSE_INTERVAL_MS);
+    const pt = { t: h.t, c: h.c };
+    if (bucket === lastBucket) out[out.length - 1] = pt;
+    else { out.push(pt); lastBucket = bucket; }
+  }
+  return out;
+}
+
 function hexId() {
   const b = new Uint8Array(3);
   crypto.getRandomValues(b);
@@ -81,6 +95,13 @@ export class EventDO extends DurableObject {
       this.ctx.waitUntil(Promise.all([this._save(), this._saveHistory()]));
     } else {
       this._hist = hist ?? [];
+    }
+    // Backfill : event antérieur à la série grossière (clé absente) → reconstruit
+    // depuis l'historique fin (jusqu'à 24h dispo) pour que les vues longues ne
+    // démarrent pas à vide. Données > 24h jamais stockées → non récupérables.
+    if (this._histCoarse.length === 0 && this._hist.length > 0) {
+      this._histCoarse = downsampleCoarse(this._hist).slice(-MAX_HISTORY_COARSE);
+      this.ctx.waitUntil(this._saveHistoryCoarse());
     }
   }
 

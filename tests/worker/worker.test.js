@@ -286,6 +286,21 @@ describe('Historique par groupe (alarme)', () => {
     expect(migrated.hist).toHaveLength(1);
     expect(migrated.stateHasHistory).toBe(false);
   });
+
+  it('backfill : reconstruit la série grossière depuis l\'historique fin (event antérieur)', async () => {
+    const { id: e, groups } = await createEvent();
+    await count(e, groups[0].id, 5, 'bf1');
+    const stub = env.EVENT.get(env.EVENT.idFromName(e));
+    await runInDurableObject(stub, (instance) => instance.alarm()); // remplit l'historique fin + grossier
+    // simule un event antérieur à la série grossière : on efface la clé + le cache mémoire
+    await runInDurableObject(stub, async (instance, st) => {
+      await st.storage.delete('historyCoarse');
+      instance._s = null; instance._histCoarse = null;
+    });
+    const hist = await (await SELF.fetch(`${BASE}/api/history?code=${ADMIN}&e=${e}`)).json();
+    expect(hist.historyCoarse.length).toBeGreaterThan(0);
+    expect(hist.historyCoarse.at(-1).c).toBe(5); // dernier total reconstruit depuis le fin
+  });
 });
 
 describe('POST /api/reset-counts — remet à 0 sans effacer l\'historique', () => {
