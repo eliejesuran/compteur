@@ -16,8 +16,8 @@ const MAX_OPS    = 100;  // opérateurs distincts (opStats) par groupe
 const MAX_HISTORY = 2880; // points d'historique FIN max (24h @ 30s) — aligné local/cloud
 // Série GROSSIÈRE (total seul) : 1 pt / 30 min, 2880 pts = 60 jours. Pour les vues longues
 // (7j/30j/début) sans exploser le stockage (2 Mo/clé cloud). Aligné local/cloud.
-const MAX_HISTORY_COARSE = 2880;
-const COARSE_INTERVAL_MS  = 30 * 60 * 1000; // 30 min
+const MAX_HISTORY_COARSE = 17280;
+const COARSE_INTERVAL_MS  = 5 * 60 * 1000; // 5 min
 
 // S3 : rate-limit local (token bucket par IP) — mêmes valeurs que le Worker CF (L3)
 const RL_CAPACITY = 300; // burst max d'une salve

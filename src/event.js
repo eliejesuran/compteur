@@ -4,9 +4,9 @@ import QRCode from 'qrcode';
 const MAX_GROUPS = 20;  // R4/L1 : groupes max par événement
 const MAX_OPS    = 100; // R4/L2 : opérateurs distincts trackés (opStats) par groupe
 const MAX_HISTORY = 2880; // points d'historique FIN max (24h @ 30s) — aligné local/cloud
-// Série GROSSIÈRE (total seul) : 1 pt / 30 min, 2880 pts = 60 jours (clé DO séparée).
-const MAX_HISTORY_COARSE = 2880;
-const COARSE_INTERVAL_MS  = 30 * 60 * 1000; // 30 min
+// Série GROSSIÈRE (total seul) : 1 pt / 5 min, 17280 pts = 60 jours (clé DO séparée).
+const MAX_HISTORY_COARSE = 17280;
+const COARSE_INTERVAL_MS  = 5 * 60 * 1000; // 5 min
 
 // L3 : token bucket par IP. CAPACITY = burst max d'une salve (réduit de 2000 → 300
 // pour limiter l'injection en rafale) ; RATE = débit soutenu rechargé (tokens/s).

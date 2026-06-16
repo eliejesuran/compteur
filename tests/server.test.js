@@ -1115,12 +1115,12 @@ describe('Historique grossier (rétention 60j)', () => {
     assert.equal(res.body.historyCoarse.at(-1).c, 3);
   });
 
-  test('plafonne à MAX_HISTORY_COARSE (2880)', () => {
+  test('plafonne à MAX_HISTORY_COARSE (17280)', () => {
     const e = evt();
     e.historyCoarse = [];
-    for (let i = 0; i < 2880; i++) e.historyCoarse.push({ t: i, c: 0 });
+    for (let i = 0; i < 17280; i++) e.historyCoarse.push({ t: i, c: 0 });
     recordHistoryCoarse();
-    assert.equal(e.historyCoarse.length, 2880, 'shift maintient le plafond');
+    assert.equal(e.historyCoarse.length, 17280, 'shift maintient le plafond');
   });
 
   test('reset-counts ajoute un point grossier à 0', async () => {
