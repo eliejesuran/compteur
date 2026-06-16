@@ -363,15 +363,21 @@ function fmt(ts) {
     : d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
 }
 
+// Axe X = temps réel (échelle linéaire sur timestamps) → les points sont placés à leur
+// vraie position temporelle : un pas de 30 min se voit comme 30 min, pas comme une case.
 function buildChart(history, currentTotal, cap, groups) {
-  const labels = [...history.map(h => fmt(h.t)), fmt(Date.now())];
-  const values = [...history.map(h => h.c), currentTotal];
+  const now  = Date.now();
+  const xMin = history.length ? history[0].t : now;
   const p = chartPalette();
   groupDatasets = {};
 
   const datasets = [
-    { label:'Présents', data:values, borderColor:'#3b82f6', backgroundColor:'rgba(59,130,246,0.08)', fill:true, tension:0.3, pointRadius:0, pointHoverRadius:4, borderWidth:2.5 },
-    { label:'Capacité', data:Array(labels.length).fill(cap), borderColor:'rgba(239,68,68,0.55)', borderDash:[6,4], borderWidth:1.5, pointRadius:0, fill:false },
+    { label:'Présents',
+      data:[...history.map(h => ({ x: h.t, y: h.c })), { x: now, y: currentTotal }],
+      borderColor:'#3b82f6', backgroundColor:'rgba(59,130,246,0.08)', fill:true, tension:0.3, pointRadius:0, pointHoverRadius:4, borderWidth:2.5 },
+    { label:'Capacité',
+      data:[{ x: xMin, y: cap }, { x: now, y: cap }],
+      borderColor:'rgba(239,68,68,0.55)', borderDash:[6,4], borderWidth:1.5, pointRadius:0, fill:false },
   ];
 
   if (groups.length > 1) {
@@ -381,7 +387,7 @@ function buildChart(history, currentTotal, cap, groups) {
         label: g.name,
         // Vraie évolution enregistrée (h.g[gid]) + point courant. null avant le début
         // de l'enregistrement par groupe → la ligne démarre quand les données existent.
-        data: [...history.map(h => h.g?.[g.id] ?? null), g.count],
+        data: [...history.map(h => ({ x: h.t, y: h.g?.[g.id] ?? null })), { x: now, y: g.count }],
         borderColor: color,
         backgroundColor: 'transparent',
         fill: false, tension: 0.3, pointRadius: 0, pointHoverRadius: 4,
@@ -393,16 +399,19 @@ function buildChart(history, currentTotal, cap, groups) {
 
   chart = new Chart(document.getElementById('chart').getContext('2d'), {
     type: 'line',
-    data: { labels, datasets },
+    data: { datasets },
     options: {
       responsive:true, maintainAspectRatio:false, animation:false,
-      interaction:{ mode:'index', intersect:false },
+      interaction:{ mode:'nearest', axis:'x', intersect:false },
       plugins:{
         legend:{ labels:{ color:p.legend, boxWidth:12, font:{size:12} } },
-        tooltip:{ backgroundColor:p.tooltipBg, borderColor:p.tooltipBorder, borderWidth:1, titleColor:p.tooltipTitle, bodyColor:p.tooltipBody },
+        tooltip:{ backgroundColor:p.tooltipBg, borderColor:p.tooltipBorder, borderWidth:1, titleColor:p.tooltipTitle, bodyColor:p.tooltipBody,
+          callbacks:{ title: items => items.length ? new Date(items[0].parsed.x).toLocaleString('fr-FR',{ day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '' } },
       },
       scales:{
-        x:{ ticks:{ color:p.tick, maxTicksLimit:7, font:{size:11} }, grid:{ color:p.gridX } },
+        x:{ type:'linear', bounds:'data',
+            ticks:{ color:p.tick, maxTicksLimit:7, font:{size:11}, callback: v => fmt(v) },
+            grid:{ color:p.gridX } },
         y:{ beginAtZero:true, ticks:{ color:p.tick, font:{size:11} }, grid:{ color:p.gridY } },
       },
     },
@@ -447,15 +456,17 @@ function renderChart() {
 // échantillons 30s du serveur, rafraîchis périodiquement).
 function updateLivePoint() {
   if (!chart) return;
-  const ds = chart.data;
-  const last = ds.labels.length - 1;
-  if (last < 0) return;
-  ds.labels[last] = fmt(Date.now());
-  ds.datasets[0].data[last] = lastTotal;
+  const now = Date.now();
+  const ds = chart.data.datasets;
+  const setLast = (arr, pt) => { if (arr.length) arr[arr.length - 1] = pt; };
+  setLast(ds[0].data, { x: now, y: lastTotal });
+  // Capacité : ligne 2 points [début des données, maintenant]
+  const d0 = ds[0].data;
+  ds[1].data = [{ x: d0.length ? d0[0].x : now, y: capacity }, { x: now, y: capacity }];
   if (lastGroups && lastGroups.length > 1) {
     lastGroups.forEach(g => {
       const idx = groupDatasets[g.id];
-      if (idx !== undefined) ds.datasets[idx].data[last] = g.count;
+      if (idx !== undefined) setLast(ds[idx].data, { x: now, y: g.count });
     });
   }
   chart.update('none');
@@ -540,10 +551,7 @@ function connectWS(eventId) {
       if (msg.capacity !== undefined) {
         capacity = msg.capacity;
         document.getElementById('s-cap').textContent = capacity;
-        if (chart) {
-          chart.data.datasets[1].data = Array(chart.data.labels.length).fill(capacity);
-          chart.update('none');
-        }
+        updateLivePoint(); // recompose la ligne capacité (échelle linéaire) avec la nouvelle valeur
       }
     }
   };
