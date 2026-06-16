@@ -128,10 +128,20 @@
     @media (prefers-color-scheme: light) {
       #bxl-bg pre { color: rgba(80, 60, 10, 0.06); }
     }
+    /* Logo */
+    .logo-bar { margin-bottom: 14px; }
+    .app-logo { height: 28px; width: auto; display: block; }
+    #logo-light { display: none; }
+    @media (prefers-color-scheme: light) { #logo-dark { display: none; } #logo-light { display: block; } }
   </style>
 </head>
 <body>
 <div id="bxl-bg" aria-hidden="true"><pre id="bxl-art"></pre></div>
+
+<div class="logo-bar">
+  <img id="logo-dark"  class="app-logo" src="/logo_white.png" alt="" aria-hidden="true">
+  <img id="logo-light" class="app-logo" src="/logo.png"       alt="" aria-hidden="true">
+</div>
 
 <!-- ── Login ── -->
 <div id="login-view">
