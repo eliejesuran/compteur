@@ -6,7 +6,7 @@ const request = require('supertest');
 const WebSocket = require('ws');
 const { randomUUID } = require('node:crypto');
 
-const { server, state, eventSeenOps, trimSeenOps, wsClients, recentlyDisconnected, rlBuckets, buildSnapshot, applySnapshot } = require('../server');
+const { server, state, eventSeenOps, trimSeenOps, wsClients, recentlyDisconnected, rlBuckets, buildSnapshot, applySnapshot, recordHistory } = require('../server');
 
 const ARCHIVED_EVT_ID = 'archevt';
 
@@ -957,5 +957,42 @@ describe('Plafond opStats (R4/L2)', () => {
     assert.equal(g.opStats['Op100'], undefined, 'nouveau > cap : non tracké');
     assert.equal(g.opStats['Op0'].in, 2, 'existant : accumule encore');
     assert.equal(g.count, 102, 'comptage jamais perdu');
+  });
+});
+
+describe('Historique par groupe', () => {
+  test('recordHistory enregistre le détail du count par groupe (g)', async () => {
+    state.events[EVT_ID].groups['g2'] =
+      { id: 'g2', name: 'Entrée B', count: 0, totalIn: 0, totalOut: 0, opStats: {} };
+    const send = (g, d) => request(server).post('/api/count')
+      .send({ delta: d, uuid: randomUUID(), e: EVT_ID, g });
+    await send(GRP_ID, 5);
+    await send(GRP_ID, 1);
+    await send('g2', 5);
+
+    recordHistory();
+
+    const h = evt().history;
+    assert.equal(h.length, 1);
+    assert.equal(h[0].c, 11, 'total enregistré');
+    assert.equal(h[0].g[GRP_ID], 6, 'count du groupe 1');
+    assert.equal(h[0].g['g2'], 5, 'count du groupe 2');
+  });
+
+  test('/api/history renvoie les points avec le détail g', async () => {
+    grp().count = 4;
+    recordHistory();
+    const res = await request(server).get(`/api/history?code=admin123&e=${EVT_ID}`);
+    assert.equal(res.status, 200);
+    const last = res.body.history.at(-1);
+    assert.equal(last.c, 4);
+    assert.equal(last.g[GRP_ID], 4);
+  });
+
+  test('plafonne à MAX_HISTORY (2880) points', () => {
+    const e = evt();
+    for (let i = 0; i < 2880; i++) e.history.push({ t: i, c: 0, g: {} });
+    recordHistory();
+    assert.equal(e.history.length, 2880, 'shift maintient le plafond');
   });
 });

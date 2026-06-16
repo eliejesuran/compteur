@@ -215,6 +215,52 @@ describe('Rate-limit / burst CF (L3) — réduit de 2000 à ~300', () => {
   });
 });
 
+describe('Historique par groupe (alarme)', () => {
+  it('enregistre le détail du count par groupe à chaque échantillon', async () => {
+    const { id: e, groups } = await createEvent();
+    const g1 = groups[0].id;
+    const g2 = (await (await SELF.fetch(`${BASE}/api/groups`, J({ code: ADMIN, e, name: 'Entrée B' }))).json()).id;
+
+    await count(e, g1, 5, 'h1');
+    await count(e, g1, 1, 'h2');
+    await count(e, g2, 5, 'h3');
+
+    // déclenche l'alarme (échantillonnage historique) directement sur le DO
+    const stub = env.EVENT.get(env.EVENT.idFromName(e));
+    await runInDurableObject(stub, (instance) => instance.alarm());
+
+    const hist = await (await SELF.fetch(`${BASE}/api/history?code=${ADMIN}&e=${e}`)).json();
+    const last = hist.history.at(-1);
+    expect(last.c).toBe(11);
+    expect(last.g[g1]).toBe(6);
+    expect(last.g[g2]).toBe(5);
+  });
+
+  it('migre l\'ancien historique inline (state.history) vers la clé séparée', async () => {
+    const { id: e } = await createEvent();
+    const stub = env.EVENT.get(env.EVENT.idFromName(e));
+    // simule un event d'avant la feature : historique inline dans `state`, pas de clé `history`
+    await runInDurableObject(stub, async (instance, st) => {
+      const s = await st.storage.get('state');
+      s.history = [{ t: 1, c: 2 }];        // ancien format (sans g)
+      await st.storage.put('state', s);
+      await st.storage.delete('history');
+      instance._s = null;                  // force un rechargement → déclenche la migration
+    });
+    const hist = await (await SELF.fetch(`${BASE}/api/history?code=${ADMIN}&e=${e}`)).json();
+    expect(hist.history.length).toBe(1);
+    expect(hist.history[0].c).toBe(2);
+    expect(hist.history[0].g).toBeUndefined(); // ancien point conservé tel quel
+    // la clé `history` est désormais peuplée et `state` ne contient plus l'historique inline
+    const migrated = await runInDurableObject(stub, async (instance, st) => ({
+      hist: await st.storage.get('history'),
+      stateHasHistory: 'history' in (await st.storage.get('state')),
+    }));
+    expect(migrated.hist).toHaveLength(1);
+    expect(migrated.stateHasHistory).toBe(false);
+  });
+});
+
 // ⚠️ Doit rester le DERNIER bloc : il remplit le registre jusqu'au plafond.
 describe('Plafond événements (R4/L1) — 50 au total', () => {
   async function totalEvents() {

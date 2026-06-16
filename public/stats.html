@@ -339,12 +339,13 @@ function buildChart(history, currentTotal, cap, groups) {
       const color = GROUP_COLORS[i % GROUP_COLORS.length];
       datasets.push({
         label: g.name,
-        // Remplit toute la période historique avec le count actuel → ligne visible dès le chargement
-        data: Array(labels.length).fill(g.count),
+        // Vraie évolution enregistrée (h.g[gid]) + point courant. null avant le début
+        // de l'enregistrement par groupe → la ligne démarre quand les données existent.
+        data: [...history.map(h => h.g?.[g.id] ?? null), g.count],
         borderColor: color,
         backgroundColor: 'transparent',
         fill: false, tension: 0.3, pointRadius: 0, pointHoverRadius: 4,
-        borderWidth: 1.5, borderDash: [4, 2],
+        borderWidth: 1.5, borderDash: [4, 2], spanGaps: true,
       });
       groupDatasets[g.id] = datasets.length - 1;
     });

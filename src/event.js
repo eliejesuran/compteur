@@ -3,6 +3,7 @@ import QRCode from 'qrcode';
 
 const MAX_GROUPS = 20;  // R4/L1 : groupes max par événement
 const MAX_OPS    = 100; // R4/L2 : opérateurs distincts trackés (opStats) par groupe
+const MAX_HISTORY = 2880; // points d'historique max (24h @ 30s) — aligné local/cloud
 
 // L3 : token bucket par IP. CAPACITY = burst max d'une salve (réduit de 2000 → 300
 // pour limiter l'injection en rafale) ; RATE = débit soutenu rechargé (tokens/s).
@@ -31,6 +32,7 @@ export class EventDO extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
     this._s            = null;
+    this._hist         = null;      // historique [{t,c,g}] — clé storage séparée (écrite par l'alarme)
     this._seen         = new Set();
     this._rl           = new Map(); // T3: token-bucket rate limiter — ip → {tokens, lastMs}
     this._recentlyDisc = new Map(); // U4: name → {disconnectedAt, groupId}
@@ -58,12 +60,22 @@ export class EventDO extends DurableObject {
 
   async _load() {
     if (this._s !== null) return;
-    const [s, seen] = await Promise.all([
+    const [s, seen, hist] = await Promise.all([
       this.ctx.storage.get('state'),
       this.ctx.storage.get('seen'),
+      this.ctx.storage.get('history'),
     ]);
     this._s    = s    ?? null;
     this._seen = new Set(seen ?? []);
+    // Historique dans une clé séparée (écrite seulement par l'alarme, 30 s) → _save()
+    // par comptage reste léger. Migration des events existants : historique inline dans `state`.
+    if (this._s && Array.isArray(this._s.history)) {
+      this._hist = this._s.history;
+      delete this._s.history;
+      this.ctx.waitUntil(Promise.all([this._save(), this._saveHistory()]));
+    } else {
+      this._hist = hist ?? [];
+    }
   }
 
   async _save() {
@@ -71,6 +83,17 @@ export class EventDO extends DurableObject {
       this.ctx.storage.put('state', this._s),
       this.ctx.storage.put('seen', [...this._seen].slice(-2500)),
     ]);
+  }
+
+  async _saveHistory() {
+    await this.ctx.storage.put('history', this._hist);
+  }
+
+  // Point d'historique : total + détail du count par groupe (g[groupId])
+  _historyPoint() {
+    const g = {};
+    for (const grp of Object.values(this._s.groups)) g[grp.id] = grp.count;
+    return { t: Date.now(), c: this._total(), g };
   }
 
   _total() {
@@ -154,8 +177,8 @@ export class EventDO extends DurableObject {
           createdAt: Date.now(),
           archived:  false,
           groups:    { [groupId]: makeGroup(groupId, 'Principal') },
-          history:   [],
         };
+        this._hist = [];
         await this._save();
         await this.ctx.storage.setAlarm(Date.now() + 30_000);
       }
@@ -178,6 +201,7 @@ export class EventDO extends DurableObject {
       await this.ctx.storage.deleteAlarm();
       await this.ctx.storage.deleteAll();
       this._s = null;
+      this._hist = [];
       this._seen = new Set();
       this._recentlyDisc.clear();
       this._rl.clear();
@@ -271,7 +295,7 @@ export class EventDO extends DurableObject {
       const totalIn  = Object.values(this._s.groups).reduce((s, g) => s + g.totalIn,  0);
       const totalOut = Object.values(this._s.groups).reduce((s, g) => s + g.totalOut, 0);
       return Response.json({
-        history:  this._s.history,
+        history:  this._hist,
         total:    this._total(),
         capacity: this._s.capacity,
         totalIn, totalOut,
@@ -308,7 +332,8 @@ export class EventDO extends DurableObject {
           for (const grp of Object.values(this._s.groups)) {
             grp.count = 0; grp.totalIn = 0; grp.totalOut = 0; grp.opStats = {};
           }
-          this._s.history = [];
+          this._hist = [];
+          await this._saveHistory();
           this._seen.clear();
         }
       }
@@ -449,9 +474,9 @@ export class EventDO extends DurableObject {
     await this._load();
     if (!this._s || this._s.archived) return; // ne pas replanifier si archivé
 
-    this._s.history.push({ t: Date.now(), c: this._total() });
-    if (this._s.history.length > 2880) this._s.history.shift();
-    await this._save();
+    this._hist.push(this._historyPoint());
+    if (this._hist.length > MAX_HISTORY) this._hist.shift();
+    await this._saveHistory();
     await this.ctx.storage.setAlarm(Date.now() + 30_000);
   }
 }

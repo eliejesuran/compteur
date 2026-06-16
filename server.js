@@ -13,6 +13,7 @@ const STATE_FILE = path.join(__dirname, 'state.json');
 const MAX_EVENTS = 50;   // événements au total (archivés inclus)
 const MAX_GROUPS = 20;   // groupes par événement
 const MAX_OPS    = 100;  // opérateurs distincts (opStats) par groupe
+const MAX_HISTORY = 2880; // points d'historique max (24h @ 30s) — aligné local/cloud
 
 // S3 : rate-limit local (token bucket par IP) — mêmes valeurs que le Worker CF (L3)
 const RL_CAPACITY = 300; // burst max d'une salve
@@ -74,6 +75,22 @@ function eventTotal(evt) {
 
 function groupSummary(evt) {
   return Object.values(evt.groups).map(g => ({ id: g.id, name: g.name, count: g.count }));
+}
+
+// Point d'historique : total + détail du count par groupe (g[groupId])
+function historyPoint(evt) {
+  const g = {};
+  for (const grp of Object.values(evt.groups)) g[grp.id] = grp.count;
+  return { t: Date.now(), c: eventTotal(evt), g };
+}
+
+// Échantillonne l'historique de tous les events actifs (appelé toutes les 30 s)
+function recordHistory() {
+  for (const evt of Object.values(state.events)) {
+    if (evt.archived) continue;
+    evt.history.push(historyPoint(evt));
+    if (evt.history.length > MAX_HISTORY) evt.history.shift();
+  }
 }
 
 function ensureSeenOps(id) {
@@ -550,14 +567,8 @@ if (require.main === module) {
   // Sauvegarde de secours toutes les 30s (scheduleSave après chaque count couvre le cas normal)
   setInterval(flushSave, 30000);
 
-  // Record history (total count per event) every 30s
-  setInterval(() => {
-    for (const evt of Object.values(state.events)) {
-      if (evt.archived) continue;
-      evt.history.push({ t: Date.now(), c: eventTotal(evt) });
-      if (evt.history.length > 2880) evt.history.shift();
-    }
-  }, 30000);
+  // Record history (total + détail par groupe) every 30s
+  setInterval(recordHistory, 30000);
 
   server.listen(PORT, '0.0.0.0', () => {
     const ips = getLocalIPs();
@@ -573,4 +584,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, server, state, eventSeenOps, trimSeenOps, wsClients, recentlyDisconnected, rlBuckets, checkAdmin, checkAuth, buildSnapshot, applySnapshot };
+module.exports = { app, server, state, eventSeenOps, trimSeenOps, wsClients, recentlyDisconnected, rlBuckets, checkAdmin, checkAuth, buildSnapshot, applySnapshot, recordHistory };
