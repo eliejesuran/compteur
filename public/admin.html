@@ -202,7 +202,7 @@
       <select id="qr-group-sel" onchange="loadQR(this.value)" style="margin-bottom:10px"></select>
       <img id="qr-img" src="" alt="QR Code">
       <div id="qr-url"></div>
-      <div id="ip-list"></div>
+      <!-- div id="ip-list"></div -->
     </div>
 
     <!-- Capacity -->
@@ -242,7 +242,7 @@
     <!-- Reset compteurs (garde l'historique) — admin + perm -->
     <div class="card" id="card-reset-counts">
       <h2>Remettre les compteurs à zéro</h2>
-      <label>Remet tous les groupes à 0 mais <strong>conserve l'historique</strong> (visible dans l'export). Utile pour un événement sur plusieurs jours.</label>
+      <label>Remet tous les groupes à 0 mais <strong>conserve l'historique</strong> (visible dans l'export)</label>
       <button class="secondary" onclick="resetCounts()">Compteurs à zéro</button>
       <div class="toast" id="reset-counts-toast"></div>
     </div>
