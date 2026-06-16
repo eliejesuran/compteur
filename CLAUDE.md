@@ -32,6 +32,7 @@ POST /api/groups             {code, e, name?} → {id, name}
 GET  /api/history?code=X&e=X → {history:[{t,c,g}], total, capacity, totalIn, totalOut, groups:[{id,name,count,totalIn,totalOut,opStats}]}  // g={groupId:count} : détail par groupe à chaque point
 GET  /api/clients?code=X&e=X → {clients:[{name,groupName,connectedAt}]}
 POST /api/admin/config       {code, e, g?, capacity?, name?, newCode?, newPermCode?, reset?, archived?, deleteGroup?, deleteEvent?} → {ok}
+POST /api/reset-counts       {code, e} → {ok}  // admin OU perm : count groupes→0, garde historique (+1 pt) + totalIn/out/opStats
 GET  /api/qr?code=X&e=X&g=Y  → {qr:dataURL, url}
 GET  /api/ips?code=X         → {ips:string[], port}
 ```
@@ -52,7 +53,7 @@ Backoff reconnexion : 1s→2s→4s→…→30s, reset sur succès ou switch even
 ## Invariants critiques
 - **State** : `{adminCode, permCode, events:{[id]:{capacity,history,groups:{[id]:GroupState}}}}`. Groupe "Principal" auto-créé. Dernier groupe non supprimable. Event archivé → 404.
 - **UUID dedup** scopé par event — protège les retries réseau, pas la multi-porte.
-- **Delta** jamais état absolu → concurrent-safe. `Math.max(0, count+delta)` serveur ET client.
+- **Delta** jamais état absolu → concurrent-safe. **Bornage au TOTAL, pas au groupe** : `eff = (total+delta<0) ? -total : delta` puis `grp.count += eff` (serveur `server.js`+`event.js` ET client `index.html`). Un groupe peut donc être **négatif** (entrée par un groupe, sortie par un autre) tant que le total event reste ≥ 0. `totalIn/out`/opStats comptés sur `eff`.
 - **Queue localStorage** (pas SW) → compat Safari iOS. Ancienne queue sans champ `e` vidée au démarrage.
 - **UI optimiste** : total + groupe mis à jour avant ack serveur.
 - **Broadcast** : un JSON par event, tous les clients extraient leur groupe côté JS → O(1) sérialisation.

@@ -186,6 +186,40 @@ describe('POST /api/count — jamais négatif', () => {
   });
 });
 
+// ── POST /api/count — groupe négatif autorisé, total borné à 0 ────────────────
+
+describe('POST /api/count — groupe peut être négatif si le total reste ≥ 0', () => {
+  const G2 = 'grp2';
+  function addG2() { evt().groups[G2] = { id: G2, name: 'Sortie', count: 0, totalIn: 0, totalOut: 0, opStats: {} }; }
+
+  test('sortie par un autre groupe : count groupe négatif, total positif', async () => {
+    addG2();
+    grp().count = 5; // groupe A : 5 entrées
+    // 3 sorties par le groupe B (personnes entrées par A)
+    for (let i = 0; i < 3; i++) {
+      await request(server).post('/api/count')
+        .send({ delta: -1, uuid: randomUUID(), e: EVT_ID, g: G2 });
+    }
+    assert.equal(evt().groups[G2].count, -3); // groupe négatif autorisé
+    assert.equal(grp().count,            5);
+    assert.equal(eventTotal2(),          2); // total = 5 - 3 ≥ 0
+  });
+
+  test('le total ne descend jamais sous 0 même via un groupe', async () => {
+    addG2();
+    grp().count = 2;
+    const res = await request(server).post('/api/count')
+      .send({ delta: -5, uuid: randomUUID(), e: EVT_ID, g: G2 });
+    assert.equal(res.body.total,         0);   // clampé à 0
+    assert.equal(evt().groups[G2].count, -2);  // n'applique que -2 (eff)
+    assert.equal(evt().groups[G2].totalOut, 2);
+  });
+});
+
+function eventTotal2() {
+  return Object.values(evt().groups).reduce((s, g) => s + g.count, 0);
+}
+
 // ── POST /api/count — alerte capacité ────────────────────────────────────────
 
 describe('POST /api/count — alerte capacité', () => {
@@ -331,6 +365,55 @@ describe('POST /api/admin/config', () => {
   });
 
   test('changement de code : nouveau code fonctionne, ancien échoue', async () => {
+    await request(server).post('/api/admin/config')
+      .send({ code: 'admin123', newCode: 'newpass99' });
+    assert.equal(state.adminCode, 'newpass99');
+
+    const bad = await request(server).get(`/api/history?code=admin123&e=${EVT_ID}`);
+    assert.equal(bad.status, 403);
+
+    const ok = await request(server).get(`/api/history?code=newpass99&e=${EVT_ID}`);
+    assert.equal(ok.status, 200);
+  });
+});
+
+// ── POST /api/reset-counts — remet à 0 sans effacer l'historique ──────────────
+
+describe('POST /api/reset-counts', () => {
+  test('count=0, mais historique + totalIn/out conservés', async () => {
+    grp().count    = 50;
+    grp().totalIn  = 60;
+    grp().totalOut = 10;
+    evt().history  = [{ t: 1, c: 50, g: { [GRP_ID]: 50 } }];
+
+    const res = await request(server).post('/api/reset-counts')
+      .send({ code: 'admin123', e: EVT_ID });
+    assert.equal(res.body.ok,        true);
+    assert.equal(grp().count,        0);
+    assert.equal(grp().totalIn,      60);   // conservé
+    assert.equal(grp().totalOut,     10);   // conservé
+    assert.equal(evt().history.length, 2);  // ancien point + point de remise à zéro
+    assert.equal(evt().history.at(-1).c, 0);
+  });
+
+  test('autorisé pour le rôle PERM', async () => {
+    state.permCode = 'permcode';
+    grp().count = 7;
+    const res = await request(server).post('/api/reset-counts')
+      .send({ code: 'permcode', e: EVT_ID });
+    assert.equal(res.status,  200);
+    assert.equal(grp().count, 0);
+  });
+
+  test('code invalide → 403', async () => {
+    const res = await request(server).post('/api/reset-counts')
+      .send({ code: 'wrong', e: EVT_ID });
+    assert.equal(res.status, 403);
+  });
+});
+
+describe('config — divers', () => {
+  test('changement de code : nouveau code fonctionne, ancien échoue (bis)', async () => {
     await request(server).post('/api/admin/config')
       .send({ code: 'admin123', newCode: 'newpass99' });
     assert.equal(state.adminCode, 'newpass99');

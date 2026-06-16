@@ -691,9 +691,11 @@ function renderQueueBadge() {
 
 function tap(delta) {
   const uuid = crypto.randomUUID();
-  // Mise à jour optimiste : total ET compteur du groupe
-  setCount(count + delta);
-  setGroupCount(Math.max(0, groupCount + delta), groupName);
+  // Mise à jour optimiste : total ET compteur du groupe.
+  // Le groupe peut devenir négatif ; seul le total est borné à 0 (eff = delta appliqué).
+  const eff = (count + delta < 0) ? -count : delta;
+  setCount(count + eff);
+  setGroupCount(groupCount + eff, groupName);
 
   const op = { delta, uuid, e: EVENT_ID, g: GROUP_ID };
   if (opName) op.name = opName;

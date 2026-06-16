@@ -114,6 +114,22 @@ describe('POST /api/count — mutations', () => {
     const b = await r.json();
     expect(b.alert).toBe(true);
   });
+
+  it('un groupe peut être négatif tant que le total reste ≥ 0', async () => {
+    const { id: e, groups } = await createEvent();
+    const gA = groups[0].id;
+    const gr = await SELF.fetch(`${BASE}/api/groups`, J({ code: ADMIN, e, name: 'Sortie' }));
+    const gB = (await gr.json()).id;
+
+    await count(e, gA, 5, 'a1');                 // 5 entrées par A
+    await count(e, gB, -1, 'b1');                // 1 sortie par B
+    const r = await count(e, gB, -1, 'b2');      // 1 sortie par B
+    const b = await r.json();
+    expect(b.total).toBe(3);                     // 5 - 2
+
+    const sB = await state(e, gB);
+    expect(sB.body.groupCount).toBe(-2);         // groupe négatif autorisé
+  });
 });
 
 // ── Groupes ──────────────────────────────────────────────────────────────────
@@ -258,6 +274,41 @@ describe('Historique par groupe (alarme)', () => {
     }));
     expect(migrated.hist).toHaveLength(1);
     expect(migrated.stateHasHistory).toBe(false);
+  });
+});
+
+describe('POST /api/reset-counts — remet à 0 sans effacer l\'historique', () => {
+  it('count=0, historique conservé + point de remise à zéro, totalIn préservé', async () => {
+    const { id: e, groups } = await createEvent();
+    const g = groups[0].id;
+    await count(e, g, 5, 'r1');
+    await count(e, g, 1, 'r2');
+
+    // peuple l'historique via l'alarme avant la remise à zéro
+    const stub = env.EVENT.get(env.EVENT.idFromName(e));
+    await runInDurableObject(stub, (instance) => instance.alarm());
+
+    const before = await (await SELF.fetch(`${BASE}/api/history?code=${ADMIN}&e=${e}`)).json();
+    const histLen = before.history.length;
+
+    const r = await SELF.fetch(`${BASE}/api/reset-counts`, J({ code: ADMIN, e }));
+    expect(r.status).toBe(200);
+
+    const after = await (await SELF.fetch(`${BASE}/api/history?code=${ADMIN}&e=${e}`)).json();
+    expect(after.total).toBe(0);
+    expect(after.history.length).toBe(histLen + 1);   // historique conservé + point de RAZ
+    expect(after.history.at(-1).c).toBe(0);
+    expect(after.totalIn).toBe(6);                     // flux cumulé conservé
+  });
+
+  it('autorisé pour le rôle PERM', async () => {
+    await SELF.fetch(`${BASE}/api/admin/config`, J({ code: ADMIN, newPermCode: 'permcode' }));
+    const { id: e, groups } = await createEvent();
+    await count(e, groups[0].id, 3, 'p1');
+    const r = await SELF.fetch(`${BASE}/api/reset-counts`, J({ code: 'permcode', e }));
+    expect(r.status).toBe(200);
+    const s = await state(e, groups[0].id);
+    expect(s.body.total).toBe(0);
   });
 });
 

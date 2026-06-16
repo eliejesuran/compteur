@@ -239,6 +239,14 @@
       <div class="toast" id="perm-toast"></div>
     </div>
 
+    <!-- Reset compteurs (garde l'historique) — admin + perm -->
+    <div class="card" id="card-reset-counts">
+      <h2>Remettre les compteurs à zéro</h2>
+      <label>Remet tous les groupes à 0 mais <strong>conserve l'historique</strong> (visible dans l'export). Utile pour un événement sur plusieurs jours.</label>
+      <button class="secondary" onclick="resetCounts()">Compteurs à zéro</button>
+      <div class="toast" id="reset-counts-toast"></div>
+    </div>
+
     <!-- Reset -->
     <div class="card" id="card-reset">
       <h2>Réinitialiser cet événement</h2>
@@ -687,6 +695,18 @@ async function confirmCodeChange() {
     document.getElementById('new-code').value = '';
     toast('code-toast', 'Code modifié', 'ok');
   } else toast('code-toast', 'Erreur', 'err');
+}
+
+async function resetCounts() {
+  if (!currentEvent) return;
+  if (!confirm('Remettre tous les compteurs à 0 ? L\'historique est conservé.')) return;
+  const res = await fetchT('/api/reset-counts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: adminCode, e: currentEvent }),
+  }).then(r => r.json());
+  if (res.ok) toast('reset-counts-toast', 'Compteurs remis à zéro', 'ok');
+  else toast('reset-counts-toast', 'Erreur', 'err');
 }
 
 async function resetEvent() {

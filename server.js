@@ -246,18 +246,22 @@ app.post('/api/count', (req, res) => {
   seenOps.add(uuid);
   trimSeenOps(seenOps);
 
-  grp.count = Math.max(0, grp.count + delta);
-  if (delta > 0) grp.totalIn += delta;
-  else grp.totalOut += Math.abs(delta);
+  // Un groupe peut devenir négatif (entrée par un groupe, sortie par un autre) ;
+  // seul le TOTAL de l'event est borné à 0. `eff` = delta effectivement appliqué.
+  const cur = eventTotal(evt);
+  const eff = (cur + delta < 0) ? -cur : delta;
+  grp.count += eff;
+  if (eff > 0) grp.totalIn += eff;
+  else if (eff < 0) grp.totalOut += -eff;
 
-  if (typeof name === 'string') {
+  if (typeof name === 'string' && eff !== 0) {
     const n = name.trim().slice(0, 32);
     // R4/L2 : un nouveau nom au-delà de MAX_OPS n'est plus tracké (opStats),
     // mais le comptage total/groupe reste intact — jamais de perte de compte.
     if (n && (grp.opStats[n] || Object.keys(grp.opStats).length < MAX_OPS)) {
       if (!grp.opStats[n]) grp.opStats[n] = { in: 0, out: 0 };
-      if (delta > 0) grp.opStats[n].in += delta;
-      else grp.opStats[n].out += Math.abs(delta);
+      if (eff > 0) grp.opStats[n].in += eff;
+      else grp.opStats[n].out += -eff;
     }
   }
 
@@ -424,6 +428,22 @@ app.post('/api/admin/config', (req, res) => {
   }
 
   scheduleSave(); // B6: persiste les changements de config (capacity, name, code, perm…)
+  res.json({ ok: true });
+});
+
+// Remet les compteurs de tous les groupes à 0 SANS effacer l'historique — admin ou perm.
+// Utile pour un événement multi-jours : la remise à zéro est tracée dans l'historique
+// (point ajouté) et reste visible dans l'export XLSX. totalIn/totalOut/opStats conservés.
+app.post('/api/reset-counts', (req, res) => {
+  const { code, e } = req.body ?? {};
+  if (!checkAuth(code)) return res.status(403).json({ error: 'forbidden' });
+  const evt = state.events[e];
+  if (!evt || evt.archived) return res.status(404).json({ error: 'event not found' });
+  for (const grp of Object.values(evt.groups)) grp.count = 0;
+  evt.history.push(historyPoint(evt)); // marque la remise à zéro dans l'historique
+  if (evt.history.length > MAX_HISTORY) evt.history.shift();
+  broadcastEvent(e, 0);
+  flushSave();
   res.json({ ok: true });
 });
 

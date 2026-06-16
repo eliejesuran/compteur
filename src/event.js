@@ -233,18 +233,22 @@ export class EventDO extends DurableObject {
         this._seen = new Set(arr.slice(-10_000));
       }
 
-      grp.count = Math.max(0, grp.count + delta);
-      if (delta > 0) grp.totalIn  += delta;
-      else           grp.totalOut += Math.abs(delta);
+      // Un groupe peut devenir négatif (entrée par un groupe, sortie par un autre) ;
+      // seul le TOTAL de l'event est borné à 0. `eff` = delta effectivement appliqué.
+      const cur = this._total();
+      const eff = (cur + delta < 0) ? -cur : delta;
+      grp.count += eff;
+      if (eff > 0) grp.totalIn  += eff;
+      else if (eff < 0) grp.totalOut += -eff;
 
-      if (typeof opName === 'string') {
+      if (typeof opName === 'string' && eff !== 0) {
         const n = opName.trim().slice(0, 32);
         // R4/L2 : un nouveau nom au-delà de MAX_OPS n'est plus tracké (opStats),
         // mais le comptage total/groupe reste intact — jamais de perte de compte.
         if (n && (grp.opStats[n] || Object.keys(grp.opStats).length < MAX_OPS)) {
           if (!grp.opStats[n]) grp.opStats[n] = { in: 0, out: 0 };
-          if (delta > 0) grp.opStats[n].in  += delta;
-          else           grp.opStats[n].out += Math.abs(delta);
+          if (eff > 0) grp.opStats[n].in  += eff;
+          else         grp.opStats[n].out += -eff;
         }
       }
 
@@ -252,6 +256,17 @@ export class EventDO extends DurableObject {
       this._broadcast(delta);
       this.ctx.waitUntil(this._save());
       return Response.json({ total, alert: total >= this._s.capacity });
+    }
+
+    // POST /reset-counts — remet les compteurs des groupes à 0 sans effacer l'historique.
+    // Multi-jours : un point est ajouté à l'historique (visible dans l'export). totalIn/out/opStats conservés.
+    if (path === '/reset-counts' && request.method === 'POST') {
+      for (const grp of Object.values(this._s.groups)) grp.count = 0;
+      this._hist.push(this._historyPoint());
+      if (this._hist.length > MAX_HISTORY) this._hist.shift();
+      await Promise.all([this._save(), this._saveHistory()]);
+      this._broadcast(0);
+      return Response.json({ ok: true });
     }
 
     // GET /state?g=X

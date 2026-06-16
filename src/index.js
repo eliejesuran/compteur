@@ -160,6 +160,13 @@ async function handleAPI(request, env, url, path) {
     return eventStub(env, e).fetch(iReq('/history'));
   }
 
+  // Remise à zéro des compteurs sans effacer l'historique — admin + perm (pas adminOnly)
+  if (path === '/api/reset-counts' && method === 'POST') {
+    const { e } = body ?? {};
+    if (!e) return Response.json({ error: 'e required' }, { status: 400 });
+    return eventStub(env, e).fetch(iReq('/reset-counts', 'POST'));
+  }
+
   if (path === '/api/admin/config' && method === 'POST') {
     const denied = adminOnly(); if (denied) return denied;
     const { e, g, capacity, newCode, newPermCode, reset, name, archived, deleteGroup, deleteEvent } = body ?? {};
