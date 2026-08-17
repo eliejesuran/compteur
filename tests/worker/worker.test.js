@@ -263,6 +263,38 @@ describe('Historique par groupe (alarme)', () => {
     expect(hist.historyCoarse.at(-1).g).toBeUndefined();
   });
 
+  it('les points portent les cumuls i/o, insensibles aux sorties', async () => {
+    const { id: e, groups } = await createEvent();
+    const g = groups[0].id;
+    await count(e, g,  5, 'io1');
+    await count(e, g, -1, 'io2');
+    const stub = env.EVENT.get(env.EVENT.idFromName(e));
+    await runInDurableObject(stub, (instance) => instance.alarm());
+
+    const hist = await (await SELF.fetch(`${BASE}/api/history?code=${ADMIN}&e=${e}`)).json();
+    const fin = hist.history.at(-1), gros = hist.historyCoarse.at(-1);
+    expect(fin.c).toBe(4);  // net : le −1 fait redescendre
+    expect(fin.i).toBe(5);  // cumul d'entrées : inchangé par le −1
+    expect(fin.o).toBe(1);
+    expect(gros.i).toBe(5); // la série longue porte aussi les cumuls
+    expect(gros.o).toBe(1);
+  });
+
+  it('reset-counts : c repart à 0, i/o survivent', async () => {
+    const { id: e, groups } = await createEvent();
+    await count(e, groups[0].id, 5, 'io3'); // delta ∈ {±1, ±5} uniquement
+    await count(e, groups[0].id, 1, 'io4');
+    const stub = env.EVENT.get(env.EVENT.idFromName(e));
+    await runInDurableObject(stub, (instance) => instance.alarm());
+    await SELF.fetch(`${BASE}/api/reset-counts`, J({ code: ADMIN, e }));
+
+    const hist = await (await SELF.fetch(`${BASE}/api/history?code=${ADMIN}&e=${e}`)).json();
+    expect(hist.history.at(-1).c).toBe(0);
+    expect(hist.history.at(-1).i).toBe(6);
+    expect(hist.historyCoarse.at(-1).c).toBe(0);
+    expect(hist.historyCoarse.at(-1).i).toBe(6);
+  });
+
   it('migre l\'ancien historique inline (state.history) vers la clé séparée', async () => {
     const { id: e } = await createEvent();
     const stub = env.EVENT.get(env.EVENT.idFromName(e));

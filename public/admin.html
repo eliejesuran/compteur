@@ -862,9 +862,10 @@ async function exportXLSX() {
     const fine   = data.history || [];
     const coarse = data.historyCoarse || [];
     const cutoff = fine.length ? fine[0].t : Infinity; // pas de doublon sur la zone commune
+    const row = (h, s) => ({ t: h.t, c: h.c, i: h.i, o: h.o, s });
     const merged = [
-      ...coarse.filter(h => h.t < cutoff).map(h => ({ t: h.t, c: h.c, s: 'long terme' })),
-      ...fine.map(h => ({ t: h.t, c: h.c, s: 'détaillé' })),
+      ...coarse.filter(h => h.t < cutoff).map(h => row(h, 'long terme')),
+      ...fine.map(h => row(h, 'détaillé')),
     ];
 
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
@@ -876,12 +877,15 @@ async function exportXLSX() {
       [],
       ['Période couverte', merged.length ? `${fmt(merged[0].t)} → ${fmt(merged[merged.length - 1].t)}` : '—'],
       ['Série détaillée', '1 point / minute — 48 h glissantes'],
-      ['Série long terme', '1 point / 5 minutes — 60 jours glissants (total seul)'],
+      ['Série long terme', '1 point / 5 minutes — 60 jours glissants'],
       ['Exporté le', fmt(Date.now())],
+      [],
+      ['Lecture', '« Présents » = occupation à cet instant (un −1 la fait redescendre) ; « Entrées/Sorties cumulées » = compteurs cumulés depuis la création, jamais remis à zéro par la RAZ compteurs.'],
     ]), 'Résumé');
 
-    const histRows = [['Horodatage', 'Total', 'Série']];
-    for (const { t, c, s } of merged) histRows.push([fmt(t), c, s]);
+    // Cellule vide (pas 0) si le point est antérieur à l'enregistrement des cumuls.
+    const histRows = [['Horodatage', 'Présents', 'Entrées cumulées', 'Sorties cumulées', 'Série']];
+    for (const { t, c, i, o, s } of merged) histRows.push([fmt(t), c, i ?? '', o ?? '', s]);
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(histRows), 'Historique');
 
     const grpRows = [['Groupe', 'Compteur', 'Entrées', 'Sorties']];

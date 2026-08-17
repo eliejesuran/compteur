@@ -179,6 +179,8 @@ let wsReconnectDelay = 1000;
 let wsTimer = null;
 const GROUP_COLORS = ['#f59e0b','#22c55e','#a855f7','#f97316','#06b6d4','#ec4899'];
 let groupDatasets = {}; // groupId → dataset index
+let cumulIdx = null;    // index du dataset « Entrées cumulées »
+let showCumul = false;  // mémorisé : le graphe est reconstruit à chaque fenêtre/refresh 60s
 let fullHistory = [];       // historique fin 60s (48h) — vues 2h/6h/24h/48h
 let fullHistoryCoarse = []; // historique grossier 5min (60j, total seul) — vues 7j/30j/début
 let lastTotal = 0;      // total live (WS)
@@ -384,6 +386,17 @@ function buildChart(history, currentTotal, cap, groups) {
       borderColor:'rgba(239,68,68,0.55)', borderDash:[6,4], borderWidth:1.5, pointRadius:0, fill:false },
   ];
 
+  // Entrées cumulées — axe droit (sans rapport d'échelle avec l'occupation), masqué par
+  // défaut : clic sur la légende pour l'afficher. `i` absent (points d'avant la feature)
+  // → null + spanGaps, la ligne démarre là où les cumuls ont commencé à être enregistrés.
+  cumulIdx = datasets.length;
+  datasets.push({
+    label:'Entrées cumulées', yAxisID:'y1', hidden: !showCumul,
+    data:[...history.map(h => ({ x: h.t, y: h.i ?? null })), { x: now, y: totalIn }],
+    borderColor:'#0d9488', backgroundColor:'transparent', fill:false, tension:0.3,
+    pointRadius:0, pointHoverRadius:4, borderWidth:2, borderDash:[2,3], spanGaps:true,
+  });
+
   if (groups.length > 1) {
     groups.forEach((g, i) => {
       const color = GROUP_COLORS[i % GROUP_COLORS.length];
@@ -408,7 +421,12 @@ function buildChart(history, currentTotal, cap, groups) {
       responsive:true, maintainAspectRatio:false, animation:false,
       interaction:{ mode:'nearest', axis:'x', intersect:false },
       plugins:{
-        legend:{ labels:{ color:p.legend, boxWidth:12, font:{size:12} } },
+        legend:{ labels:{ color:p.legend, boxWidth:12, font:{size:12} },
+          onClick(e, item, legend) {
+            Chart.defaults.plugins.legend.onClick.call(this, e, item, legend);
+            // Mémorise le choix : renderChart() détruit/reconstruit le graphe toutes les 60s.
+            if (item.datasetIndex === cumulIdx) showCumul = legend.chart.isDatasetVisible(cumulIdx);
+          } },
         tooltip:{ backgroundColor:p.tooltipBg, borderColor:p.tooltipBorder, borderWidth:1, titleColor:p.tooltipTitle, bodyColor:p.tooltipBody,
           callbacks:{ title: items => items.length ? new Date(items[0].parsed.x).toLocaleString('fr-FR',{ day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '' } },
       },
@@ -417,6 +435,9 @@ function buildChart(history, currentTotal, cap, groups) {
             ticks:{ color:p.tick, maxTicksLimit:7, font:{size:11}, callback: v => fmt(v) },
             grid:{ color:p.gridX } },
         y:{ beginAtZero:true, ticks:{ color:p.tick, font:{size:11} }, grid:{ color:p.gridY } },
+        // display:'auto' → l'axe droit n'apparaît que si les entrées cumulées sont affichées.
+        y1:{ type:'linear', position:'right', display:'auto', beginAtZero:true,
+             ticks:{ color:p.tick, font:{size:11} }, grid:{ drawOnChartArea:false } },
       },
     },
   });
@@ -433,6 +454,7 @@ function buildChart(history, currentTotal, cap, groups) {
     chart.options.scales.x.grid.color  = np.gridX;
     chart.options.scales.y.ticks.color = np.tick;
     chart.options.scales.y.grid.color  = np.gridY;
+    chart.options.scales.y1.ticks.color = np.tick;
     chart.update('none');
   });
 }
@@ -464,6 +486,7 @@ function updateLivePoint() {
   const ds = chart.data.datasets;
   const setLast = (arr, pt) => { if (arr.length) arr[arr.length - 1] = pt; };
   setLast(ds[0].data, { x: now, y: lastTotal });
+  if (cumulIdx !== null && ds[cumulIdx]) setLast(ds[cumulIdx].data, { x: now, y: totalIn });
   // Capacité : ligne 2 points [début des données, maintenant]
   const d0 = ds[0].data;
   ds[1].data = [{ x: d0.length ? d0[0].x : now, y: capacity }, { x: now, y: capacity }];
@@ -586,6 +609,9 @@ setInterval(() => {
     .then(d => {
       fullHistory = d.history || fullHistory;
       fullHistoryCoarse = d.historyCoarse || fullHistoryCoarse;
+      // Resync du cumul : le +delta optimiste du WS peut dériver (bornage au 0 du total).
+      totalIn = d.totalIn ?? totalIn;
+      document.getElementById('s-in').textContent = totalIn;
       if (!statsWs || statsWs.readyState !== 1) lastTotal = d.total; // pas de WS → total du fetch
       renderChart();
     })

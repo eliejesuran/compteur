@@ -83,11 +83,20 @@ function groupSummary(evt) {
   return Object.values(evt.groups).map(g => ({ id: g.id, name: g.name, count: g.count }));
 }
 
-// Point d'historique : total + détail du count par groupe (g[groupId])
+// Cumuls entrées/sorties de l'événement. Stockés dans CHAQUE point d'historique (i/o)
+// car `c` est le net (présents) : il redescend sur un −1, donc les entrées cumulées ne
+// sont pas reconstituables a posteriori depuis la courbe.
+function cumulIO(evt) {
+  let i = 0, o = 0;
+  for (const grp of Object.values(evt.groups)) { i += grp.totalIn; o += grp.totalOut; }
+  return { i, o };
+}
+
+// Point d'historique : présents (c) + cumuls (i/o) + détail du count par groupe (g[groupId])
 function historyPoint(evt) {
   const g = {};
   for (const grp of Object.values(evt.groups)) g[grp.id] = grp.count;
-  return { t: Date.now(), c: eventTotal(evt), g };
+  return { t: Date.now(), c: eventTotal(evt), ...cumulIO(evt), g };
 }
 
 // Échantillonne l'historique de tous les events actifs (appelé toutes les 60 s)
@@ -106,6 +115,7 @@ function downsampleCoarse(fine) {
   for (const h of fine) {
     const bucket = Math.floor(h.t / COARSE_INTERVAL_MS);
     const pt = { t: h.t, c: h.c };
+    if (h.i !== undefined) { pt.i = h.i; pt.o = h.o; } // absents des points d'avant la feature
     if (bucket === lastBucket) out[out.length - 1] = pt;
     else { out.push(pt); lastBucket = bucket; }
   }
@@ -128,7 +138,7 @@ function recordHistoryCoarse() {
   for (const evt of Object.values(state.events)) {
     if (evt.archived) continue;
     if (!evt.historyCoarse) evt.historyCoarse = [];
-    evt.historyCoarse.push({ t: Date.now(), c: eventTotal(evt) });
+    evt.historyCoarse.push({ t: Date.now(), c: eventTotal(evt), ...cumulIO(evt) });
     if (evt.historyCoarse.length > MAX_HISTORY_COARSE) evt.historyCoarse.shift();
   }
 }
@@ -493,7 +503,8 @@ app.post('/api/reset-counts', (req, res) => {
   evt.history.push(historyPoint(evt)); // marque la remise à zéro dans l'historique fin
   if (evt.history.length > MAX_HISTORY) evt.history.shift();
   if (!evt.historyCoarse) evt.historyCoarse = [];
-  evt.historyCoarse.push({ t: Date.now(), c: 0 }); // … et dans la série grossière
+  // … et dans la série grossière. Les cumuls i/o survivent à la RAZ (seul `c` repart à 0).
+  evt.historyCoarse.push({ t: Date.now(), c: 0, ...cumulIO(evt) });
   if (evt.historyCoarse.length > MAX_HISTORY_COARSE) evt.historyCoarse.shift();
   broadcastEvent(e, 0);
   flushSave();

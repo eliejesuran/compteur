@@ -1153,3 +1153,67 @@ describe('Historique grossier (rétention 60j)', () => {
     assert.deepEqual(evt().historyCoarse.map(p => p.c), [42], 'inchangée');
   });
 });
+
+// ── Cumuls entrées/sorties dans l'historique (i/o) ───────────────────────────
+
+describe('Cumuls i/o dans l\'historique', () => {
+  test('le point fin porte les cumuls i/o en plus du net c', () => {
+    grp().count = 4; grp().totalIn = 30; grp().totalOut = 26;
+    recordHistory();
+    const h = evt().history.at(-1);
+    assert.equal(h.c, 4,  'c = présents (net)');
+    assert.equal(h.i, 30, 'i = entrées cumulées');
+    assert.equal(h.o, 26, 'o = sorties cumulées');
+  });
+
+  test('le point grossier porte aussi i/o', () => {
+    grp().count = 4; grp().totalIn = 30; grp().totalOut = 26;
+    recordHistoryCoarse();
+    const c = evt().historyCoarse.at(-1);
+    assert.equal(c.i, 30);
+    assert.equal(c.o, 26);
+    assert.equal(c.g, undefined, 'toujours pas de détail par groupe');
+  });
+
+  test('les cumuls montent quand le net redescend (un −1 ne décrémente pas i)', async () => {
+    const e = evt();
+    e.history = []; grp().count = 0; grp().totalIn = 0; grp().totalOut = 0;
+    await request(server).post('/api/count')
+      .send({ delta: 5, uuid: randomUUID(), e: EVT_ID, g: GRP_ID });
+    await request(server).post('/api/count')
+      .send({ delta: -1, uuid: randomUUID(), e: EVT_ID, g: GRP_ID });
+    recordHistory();
+    const h = e.history.at(-1);
+    assert.equal(h.c, 4, 'net redescendu');
+    assert.equal(h.i, 5, 'entrées cumulées inchangées par la sortie');
+    assert.equal(h.o, 1);
+  });
+
+  test('reset-counts : c repart à 0, i/o survivent', async () => {
+    grp().count = 10; grp().totalIn = 77; grp().totalOut = 67;
+    await request(server).post('/api/reset-counts').send({ code: 'admin123', e: EVT_ID });
+    const fin = evt().history.at(-1), gros = evt().historyCoarse.at(-1);
+    assert.equal(fin.c, 0);
+    assert.equal(fin.i, 77, 'cumul conservé dans le point fin');
+    assert.equal(gros.c, 0);
+    assert.equal(gros.i, 77, 'cumul conservé dans le point grossier');
+  });
+
+  test('backfill : i/o repris depuis l\'historique fin', async () => {
+    const e = evt();
+    e.historyCoarse = [];
+    e.history = [{ t: 1, c: 3, i: 9, o: 6, g: {} }];
+    const res = await request(server).get(`/api/history?code=admin123&e=${EVT_ID}`);
+    assert.equal(res.body.historyCoarse.at(-1).i, 9);
+    assert.equal(res.body.historyCoarse.at(-1).o, 6);
+  });
+
+  test('backfill : point ancien sans i/o → pas de 0 inventé', async () => {
+    const e = evt();
+    e.historyCoarse = [];
+    e.history = [{ t: 1, c: 3, g: {} }]; // point d'avant la feature
+    const res = await request(server).get(`/api/history?code=admin123&e=${EVT_ID}`);
+    assert.equal(res.body.historyCoarse.at(-1).c, 3);
+    assert.equal(res.body.historyCoarse.at(-1).i, undefined, 'champ absent, pas 0');
+  });
+});

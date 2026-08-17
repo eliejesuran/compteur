@@ -34,6 +34,7 @@ function downsampleCoarse(fine) {
   for (const h of fine) {
     const bucket = Math.floor(h.t / COARSE_INTERVAL_MS);
     const pt = { t: h.t, c: h.c };
+    if (h.i !== undefined) { pt.i = h.i; pt.o = h.o; } // absents des points d'avant la feature
     if (bucket === lastBucket) out[out.length - 1] = pt;
     else { out.push(pt); lastBucket = bucket; }
   }
@@ -121,15 +122,24 @@ export class EventDO extends DurableObject {
     await this.ctx.storage.put('historyCoarse', this._histCoarse);
   }
 
-  // Point d'historique : total + détail du count par groupe (g[groupId])
+  // Point d'historique : présents (c) + cumuls (i/o) + détail du count par groupe (g[groupId])
   _historyPoint() {
     const g = {};
     for (const grp of Object.values(this._s.groups)) g[grp.id] = grp.count;
-    return { t: Date.now(), c: this._total(), g };
+    return { t: Date.now(), c: this._total(), ...this._cumulIO(), g };
   }
 
   _total() {
     return Object.values(this._s.groups).reduce((s, g) => s + g.count, 0);
+  }
+
+  // Cumuls entrées/sorties. Stockés dans CHAQUE point car `c` est le net (présents) :
+  // il redescend sur un −1, donc les entrées cumulées ne sont pas reconstituables
+  // a posteriori depuis la courbe.
+  _cumulIO() {
+    let i = 0, o = 0;
+    for (const grp of Object.values(this._s.groups)) { i += grp.totalIn; o += grp.totalOut; }
+    return { i, o };
   }
 
   _groupSummary() {
@@ -298,7 +308,8 @@ export class EventDO extends DurableObject {
       for (const grp of Object.values(this._s.groups)) grp.count = 0;
       this._hist.push(this._historyPoint());
       if (this._hist.length > MAX_HISTORY) this._hist.shift();
-      this._histCoarse.push({ t: Date.now(), c: 0 });
+      // Les cumuls i/o survivent à la RAZ (seul `c` repart à 0).
+      this._histCoarse.push({ t: Date.now(), c: 0, ...this._cumulIO() });
       if (this._histCoarse.length > MAX_HISTORY_COARSE) this._histCoarse.shift();
       await Promise.all([this._save(), this._saveHistory(), this._saveHistoryCoarse()]);
       this._broadcast(0);
@@ -545,7 +556,7 @@ export class EventDO extends DurableObject {
     // Série grossière (total seul) toutes les ~5 min (alarme cadencée à 60 s).
     const lastC = this._histCoarse[this._histCoarse.length - 1];
     if (!lastC || now - lastC.t >= COARSE_INTERVAL_MS - 5_000) {
-      this._histCoarse.push({ t: now, c: this._total() });
+      this._histCoarse.push({ t: now, c: this._total(), ...this._cumulIO() });
       if (this._histCoarse.length > MAX_HISTORY_COARSE) this._histCoarse.shift();
       await this._saveHistoryCoarse();
     }
