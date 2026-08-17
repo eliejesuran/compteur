@@ -3,7 +3,8 @@ import QRCode from 'qrcode';
 
 const MAX_GROUPS = 20;  // R4/L1 : groupes max par événement
 const MAX_OPS    = 100; // R4/L2 : opérateurs distincts trackés (opStats) par groupe
-const MAX_HISTORY = 2880; // points d'historique FIN max (24h @ 30s) — aligné local/cloud
+const MAX_HISTORY = 2880; // points d'historique FIN max (48h @ 60s) — aligné local/cloud
+const FINE_INTERVAL_MS   = 60 * 1000;      // cadence de l'alarme (était 30 s → 24h ; 60 s → 48h)
 // Série GROSSIÈRE (total seul) : 1 pt / 5 min, 17280 pts = 60 jours (clé DO séparée).
 const MAX_HISTORY_COARSE = 17280;
 const COARSE_INTERVAL_MS  = 5 * 60 * 1000; // 5 min
@@ -25,7 +26,7 @@ function makeGroup(id, name) {
   return { id, name, count: 0, totalIn: 0, totalOut: 0, opStats: {} };
 }
 
-// Réduit l'historique fin [{t,c,g}] en série grossière [{t,c}] : 1 point / bucket de 30 min
+// Réduit l'historique fin [{t,c,g}] en série grossière [{t,c}] : 1 point / bucket de 5 min
 // (le dernier de chaque bucket). Sert au backfill des events antérieurs à la série grossière.
 function downsampleCoarse(fine) {
   const out = [];
@@ -87,7 +88,7 @@ export class EventDO extends DurableObject {
     this._s          = s    ?? null;
     this._seen       = new Set(seen ?? []);
     this._histCoarse = histCoarse ?? [];
-    // Historique dans une clé séparée (écrite seulement par l'alarme, 30 s) → _save()
+    // Historique dans une clé séparée (écrite seulement par l'alarme, 60 s) → _save()
     // par comptage reste léger. Migration des events existants : historique inline dans `state`.
     if (this._s && Array.isArray(this._s.history)) {
       this._hist = this._s.history;
@@ -97,8 +98,8 @@ export class EventDO extends DurableObject {
       this._hist = hist ?? [];
     }
     // Backfill : event antérieur à la série grossière (clé absente) → reconstruit
-    // depuis l'historique fin (jusqu'à 24h dispo) pour que les vues longues ne
-    // démarrent pas à vide. Données > 24h jamais stockées → non récupérables.
+    // depuis l'historique fin (jusqu'à 48h dispo) pour que les vues longues ne
+    // démarrent pas à vide. Données > 48h jamais stockées → non récupérables.
     if (this._histCoarse.length === 0 && this._hist.length > 0) {
       this._histCoarse = downsampleCoarse(this._hist).slice(-MAX_HISTORY_COARSE);
       this.ctx.waitUntil(this._saveHistoryCoarse());
@@ -212,7 +213,7 @@ export class EventDO extends DurableObject {
         this._hist = [];
         this._histCoarse = [];
         await this._save();
-        await this.ctx.storage.setAlarm(Date.now() + 30_000);
+        await this.ctx.storage.setAlarm(Date.now() + FINE_INTERVAL_MS);
       }
       return Response.json({
         id: this._s.id, name: this._s.name,
@@ -381,7 +382,7 @@ export class EventDO extends DurableObject {
         if (archived === false) {
           const wasArchived = this._s.archived;
           this._s.archived = false;
-          if (wasArchived) await this.ctx.storage.setAlarm(Date.now() + 30_000);
+          if (wasArchived) await this.ctx.storage.setAlarm(Date.now() + FINE_INTERVAL_MS);
         }
         if (reset === true) {
           for (const grp of Object.values(this._s.groups)) {
@@ -530,7 +531,7 @@ export class EventDO extends DurableObject {
     } catch {}
   }
 
-  // ── Alarme — historique toutes les 30 s ────────────────────────────────────
+  // ── Alarme — historique toutes les 60 s ────────────────────────────────────
 
   async alarm() {
     await this._load();
@@ -541,7 +542,7 @@ export class EventDO extends DurableObject {
     if (this._hist.length > MAX_HISTORY) this._hist.shift();
     await this._saveHistory();
 
-    // Série grossière (total seul) toutes les ~30 min (alarme cadencée à 30 s).
+    // Série grossière (total seul) toutes les ~5 min (alarme cadencée à 60 s).
     const lastC = this._histCoarse[this._histCoarse.length - 1];
     if (!lastC || now - lastC.t >= COARSE_INTERVAL_MS - 5_000) {
       this._histCoarse.push({ t: now, c: this._total() });
@@ -549,6 +550,6 @@ export class EventDO extends DurableObject {
       await this._saveHistoryCoarse();
     }
 
-    await this.ctx.storage.setAlarm(now + 30_000);
+    await this.ctx.storage.setAlarm(now + FINE_INTERVAL_MS);
   }
 }

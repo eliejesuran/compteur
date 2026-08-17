@@ -848,12 +848,24 @@ async function deleteArchivedEvent() {
 }
 
 // U8: Export XLSX (SheetJS)
+// L'onglet « Historique » FUSIONNE les deux séries — sinon l'export était tronqué à la
+// fenêtre fine (48h) alors que la série longue couvre 60 jours : d'abord le long terme
+// (5 min, total seul) jusqu'au premier point détaillé, puis le détaillé (1 min).
 async function exportXLSX() {
   if (!currentEvent || typeof XLSX === 'undefined') return;
   try {
     const data = await fetchT(`/api/history?code=${adminCode}&e=${currentEvent}`).then(r => r.json());
     const evt  = events.find(e => e.id === currentEvent);
     const wb   = XLSX.utils.book_new();
+    const fmt  = t => new Date(t).toLocaleString('fr-FR');
+
+    const fine   = data.history || [];
+    const coarse = data.historyCoarse || [];
+    const cutoff = fine.length ? fine[0].t : Infinity; // pas de doublon sur la zone commune
+    const merged = [
+      ...coarse.filter(h => h.t < cutoff).map(h => ({ t: h.t, c: h.c, s: 'long terme' })),
+      ...fine.map(h => ({ t: h.t, c: h.c, s: 'détaillé' })),
+    ];
 
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
       ['Événement', evt?.name ?? currentEvent],
@@ -861,10 +873,15 @@ async function exportXLSX() {
       ['Capacité', data.capacity],
       ['Total entrées', data.totalIn],
       ['Total sorties', data.totalOut],
+      [],
+      ['Période couverte', merged.length ? `${fmt(merged[0].t)} → ${fmt(merged[merged.length - 1].t)}` : '—'],
+      ['Série détaillée', '1 point / minute — 48 h glissantes'],
+      ['Série long terme', '1 point / 5 minutes — 60 jours glissants (total seul)'],
+      ['Exporté le', fmt(Date.now())],
     ]), 'Résumé');
 
-    const histRows = [['Horodatage', 'Total']];
-    for (const { t, c } of data.history) histRows.push([new Date(t).toLocaleString('fr-FR'), c]);
+    const histRows = [['Horodatage', 'Total', 'Série']];
+    for (const { t, c, s } of merged) histRows.push([fmt(t), c, s]);
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(histRows), 'Historique');
 
     const grpRows = [['Groupe', 'Compteur', 'Entrées', 'Sorties']];

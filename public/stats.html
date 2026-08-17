@@ -141,6 +141,7 @@
       <button onclick="setRange(2,this)">2 h</button>
       <button onclick="setRange(6,this)">6 h</button>
       <button class="active" onclick="setRange(24,this)">24 h</button>
+      <button onclick="setRange(48,this)">48 h</button>
       <button onclick="setRange(168,this)">7 j</button>
       <button onclick="setRange(720,this)">30 j</button>
       <button onclick="setRange(0,this)">Début</button>
@@ -178,8 +179,8 @@ let wsReconnectDelay = 1000;
 let wsTimer = null;
 const GROUP_COLORS = ['#f59e0b','#22c55e','#a855f7','#f97316','#06b6d4','#ec4899'];
 let groupDatasets = {}; // groupId → dataset index
-let fullHistory = [];       // historique fin 30s (24h) — vues 2h/6h/24h
-let fullHistoryCoarse = []; // historique grossier 30min (60j, total seul) — vues 7j/30j/début
+let fullHistory = [];       // historique fin 60s (48h) — vues 2h/6h/24h/48h
+let fullHistoryCoarse = []; // historique grossier 5min (60j, total seul) — vues 7j/30j/début
 let lastTotal = 0;      // total live (WS)
 let lastGroups = [];    // groupes live (WS)
 let chartWindowH = 24;  // fenêtre affichée en heures ; 0 = depuis le début
@@ -357,8 +358,11 @@ function chartPalette() {
 
 function fmt(ts) {
   const d = new Date(ts);
-  // Vues longues (grossières) → date ; vues ≤24h (fines) → heure.
-  return (chartWindowH === 0 || chartWindowH > 24)
+  // 48h (à cheval sur 2 jours) → date + heure ; vues longues → date ; ≤24h → heure.
+  if (chartWindowH > 24 && chartWindowH <= 48) {
+    return d.toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  }
+  return (chartWindowH === 0 || chartWindowH > 48)
     ? d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })
     : d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
 }
@@ -433,10 +437,10 @@ function buildChart(history, currentTotal, cap, groups) {
   });
 }
 
-// Choisit la série + filtre selon la fenêtre. ≤24h → fine (avec groupes) ;
-// au-delà / début → grossière 30min (total seul, pas de lignes par groupe).
+// Choisit la série + filtre selon la fenêtre. ≤48h (rétention fine) → fine (avec groupes) ;
+// au-delà / début → grossière 5min (total seul, pas de lignes par groupe).
 function selectedSeries() {
-  const fine = chartWindowH > 0 && chartWindowH <= 24;
+  const fine = chartWindowH > 0 && chartWindowH <= 48;
   const src  = fine ? fullHistory : fullHistoryCoarse;
   const points = chartWindowH
     ? src.filter(h => h.t >= Date.now() - chartWindowH * 3600_000)
@@ -453,7 +457,7 @@ function renderChart() {
 
 // Mise à jour live : on déplace le DERNIER point (« maintenant ») au lieu d'empiler
 // un point par clic → axe temporel cohérent (les points historiques restent les
-// échantillons 30s du serveur, rafraîchis périodiquement).
+// échantillons 60s du serveur, rafraîchis périodiquement).
 function updateLivePoint() {
   if (!chart) return;
   const now = Date.now();
@@ -472,7 +476,7 @@ function updateLivePoint() {
   chart.update('none');
 }
 
-// Changement de fenêtre temporelle (boutons 2h / 6h / 24h / Début)
+// Changement de fenêtre temporelle (boutons 2h / 6h / 24h / 48h / 7j / 30j / Début)
 function setRange(h, btn) {
   chartWindowH = h;
   document.querySelectorAll('#range-btns button').forEach(b => b.classList.toggle('active', b === btn));

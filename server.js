@@ -13,8 +13,9 @@ const STATE_FILE = path.join(__dirname, 'state.json');
 const MAX_EVENTS = 50;   // événements au total (archivés inclus)
 const MAX_GROUPS = 20;   // groupes par événement
 const MAX_OPS    = 100;  // opérateurs distincts (opStats) par groupe
-const MAX_HISTORY = 2880; // points d'historique FIN max (24h @ 30s) — aligné local/cloud
-// Série GROSSIÈRE (total seul) : 1 pt / 30 min, 2880 pts = 60 jours. Pour les vues longues
+const MAX_HISTORY = 2880; // points d'historique FIN max (48h @ 60s) — aligné local/cloud
+const FINE_INTERVAL_MS   = 60 * 1000;      // 1 min (était 30 s → 24h ; 60 s → 48h de détail)
+// Série GROSSIÈRE (total seul) : 1 pt / 5 min, 17280 pts = 60 jours. Pour les vues longues
 // (7j/30j/début) sans exploser le stockage (2 Mo/clé cloud). Aligné local/cloud.
 const MAX_HISTORY_COARSE = 17280;
 const COARSE_INTERVAL_MS  = 5 * 60 * 1000; // 5 min
@@ -89,7 +90,7 @@ function historyPoint(evt) {
   return { t: Date.now(), c: eventTotal(evt), g };
 }
 
-// Échantillonne l'historique de tous les events actifs (appelé toutes les 30 s)
+// Échantillonne l'historique de tous les events actifs (appelé toutes les 60 s)
 function recordHistory() {
   for (const evt of Object.values(state.events)) {
     if (evt.archived) continue;
@@ -98,7 +99,7 @@ function recordHistory() {
   }
 }
 
-// Réduit l'historique fin [{t,c,g}] en série grossière [{t,c}] : 1 point / bucket de 30 min.
+// Réduit l'historique fin [{t,c,g}] en série grossière [{t,c}] : 1 point / bucket de 5 min.
 function downsampleCoarse(fine) {
   const out = [];
   let lastBucket = null;
@@ -112,7 +113,7 @@ function downsampleCoarse(fine) {
 }
 
 // Backfill : event sans série grossière (antérieur à la feature) → reconstruit depuis
-// l'historique fin (jusqu'à 24h dispo). Renvoie true si une reconstruction a eu lieu.
+// l'historique fin (jusqu'à 48h dispo). Renvoie true si une reconstruction a eu lieu.
 function backfillCoarse(evt) {
   if ((evt.historyCoarse?.length ?? 0) === 0 && evt.history?.length > 0) {
     evt.historyCoarse = downsampleCoarse(evt.history).slice(-MAX_HISTORY_COARSE);
@@ -122,7 +123,7 @@ function backfillCoarse(evt) {
   return false;
 }
 
-// Série grossière (total seul) — échantillonnée toutes les 30 min
+// Série grossière (total seul) — échantillonnée toutes les 5 min
 function recordHistoryCoarse() {
   for (const evt of Object.values(state.events)) {
     if (evt.archived) continue;
@@ -648,10 +649,10 @@ if (require.main === module) {
   // Sauvegarde de secours toutes les 30s (scheduleSave après chaque count couvre le cas normal)
   setInterval(flushSave, 30000);
 
-  // Record history (total + détail par groupe) every 30s
-  setInterval(recordHistory, 30000);
+  // Record history (total + détail par groupe) every 60s → 2880 pts = 48h de détail
+  setInterval(recordHistory, FINE_INTERVAL_MS);
 
-  // Série grossière (total seul) toutes les 30 min → rétention 60 jours
+  // Série grossière (total seul) toutes les 5 min → rétention 60 jours
   setInterval(recordHistoryCoarse, COARSE_INTERVAL_MS);
 
   // N9 : ping serveur→client toutes les 30s ; termine les sockets sans pong (TCP morts)
