@@ -95,7 +95,7 @@ Faits : U1 (Wake Lock), U3 (lien admin → bandeau), U4 (grâce déco), U16 (sai
 
 **Sécurité**
 - **S1** Code admin en query param GET (logs, historique, Referer). → `Authorization: Bearer`, query en fallback.
-- **S2** ✅ SRI + `crossorigin="anonymous"` sur les 3 CDN : jsQR@1.4.0 (index), SheetJS@0.20.3 (admin), Chart.js **épinglé 4.4.1** (stats, avant `@4` flottant). Hash sha384 recalculé si bump de version.
+- **S2** ✅ SRI + `crossorigin="anonymous"` sur les 3 CDN : jsQR@1.4.0 (index), SheetJS@0.20.3 (admin), Chart.js **épinglé 4.4.1** (stats, avant `@4` flottant). Hash sha384 recalculé si bump de version — **toujours vérifier dans le navigateur après coup** : un hash faux ne casse rien visiblement, le script est juste bloqué en silence (c'est arrivé sur jsQR → scan QR mort). Contrôle : `curl -sL <url> | openssl dgst -sha384 -binary | openssl base64 -A`.
 - **S4/S7** Event ID 6 hex (~16M) brute-forçable ; `/api/state`+`/api/history` non auth pour IDs connus. → 8-10 hex à la création ; option rate-limit `/api/state`.
 - **S5** Pas de check `Origin` sur upgrade WS (CSWSH) : site tiers peut lire totaux+prénoms si event ID connu. → refuser si `Origin` présent ≠ host (server.js + index.js).
 - **S6** `/api/qr` local construit l'URL depuis `Host` non validé. → whitelist IPs locales + localhost (faible, admin auth).
