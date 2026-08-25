@@ -297,6 +297,91 @@ describe('POST /api/count — déduplication', () => {
 
 // ── GET /api/history ──────────────────────────────────────────────────────────
 
+// ── Code admin à caractères spéciaux ─────────────────────────────────────────
+// Le code est libre (min. 4 car.). Les pages l'interpolaient brut dans la query :
+// un `&`, `+`, `#` ou une espace coupait l'URL → code tronqué côté serveur → 403 partout,
+// alors que la connexion (seule à encoder) passait. Les pages passent par URLSearchParams.
+
+describe('Code admin à caractères spéciaux', () => {
+  const PIEGES = ['a&b=c', 'code+plus', 'has space', 'hash#tag', 'ampli&&&'];
+
+  for (const code of PIEGES) {
+    test(`« ${code} » authentifie une fois encodé`, async () => {
+      state.adminCode = code;
+      const url = `/api/events?${new URLSearchParams({ code })}`;
+      const res = await request(server).get(url);
+      assert.equal(res.status, 200, `échec pour ${code} via ${url}`);
+      assert.equal(res.body.role, 'admin');
+    });
+  }
+
+  test('non encodé, le même code est bien tronqué → 403 (le bug d\'origine)', async () => {
+    state.adminCode = 'a&b=c';
+    const res = await request(server).get('/api/events?code=a&b=c'); // interpolation brute
+    assert.equal(res.status, 403);
+  });
+});
+
+// ── /api/history : fenêtrage (since/series) + pic serveur ────────────────────
+// L'historique complet atteint ~1,6 Mo et stats.html le retéléchargeait toutes les 60 s.
+// Le pic, lui, était calculé côté client sur la seule série fine → limité à 48 h.
+
+describe('GET /api/history — since / series / peak', () => {
+  const H = (n, t, c) => ({ t, c, i: c, o: 0, g: {} });
+
+  test('since borne les deux séries', async () => {
+    evt().history       = [H(0, 1000, 1), H(1, 5000, 2), H(2, 9000, 3)];
+    evt().historyCoarse = [{ t: 1000, c: 1 }, { t: 9000, c: 3 }];
+    const res = await request(server).get(`/api/history?code=admin123&e=${EVT_ID}&since=5000`);
+    assert.deepEqual(res.body.history.map(h => h.t),       [5000, 9000]);
+    assert.deepEqual(res.body.historyCoarse.map(h => h.t), [9000]);
+  });
+
+  test('sans since → tout (compat export XLSX)', async () => {
+    evt().history       = [H(0, 1000, 1), H(1, 9000, 3)];
+    evt().historyCoarse = [{ t: 1000, c: 1 }];
+    const res = await request(server).get(`/api/history?code=admin123&e=${EVT_ID}`);
+    assert.equal(res.body.history.length,       2);
+    assert.equal(res.body.historyCoarse.length, 1);
+  });
+
+  test('series=fine omet la série grossière, series=coarse omet la fine', async () => {
+    evt().history       = [H(0, 1000, 1)];
+    evt().historyCoarse = [{ t: 1000, c: 1 }];
+    const fine = await request(server).get(`/api/history?code=admin123&e=${EVT_ID}&series=fine`);
+    assert.equal(fine.body.history.length,       1);
+    assert.equal(fine.body.historyCoarse.length, 0);
+    const coarse = await request(server).get(`/api/history?code=admin123&e=${EVT_ID}&series=coarse`);
+    assert.equal(coarse.body.history.length,       0);
+    assert.equal(coarse.body.historyCoarse.length, 1);
+  });
+
+  test('peak couvre la série GROSSIÈRE, au-delà de la fenêtre fine', async () => {
+    // pic de 900 il y a 10 jours (grossier seul) : invisible pour l'ancien calcul client
+    evt().historyCoarse = [{ t: 1000, c: 900 }];
+    evt().history       = [H(0, 9000, 5)];
+    grp().count = 5;
+    const res = await request(server).get(`/api/history?code=admin123&e=${EVT_ID}`);
+    assert.equal(res.body.peak, 900);
+  });
+
+  test('peak reste correct même avec un fetch fenêtré qui exclut le pic', async () => {
+    evt().historyCoarse = [{ t: 1000, c: 900 }];
+    evt().history       = [H(0, 9000, 5)];
+    grp().count = 5;
+    const res = await request(server).get(`/api/history?code=admin123&e=${EVT_ID}&since=9000&series=fine`);
+    assert.equal(res.body.historyCoarse.length, 0, 'série grossière non transmise');
+    assert.equal(res.body.peak, 900, 'le pic doit survivre au fenêtrage');
+  });
+
+  test('peak tient compte du total courant si supérieur à l\'historique', async () => {
+    evt().history = [H(0, 1000, 2)];
+    grp().count = 77;
+    const res = await request(server).get(`/api/history?code=admin123&e=${EVT_ID}`);
+    assert.equal(res.body.peak, 77);
+  });
+});
+
 describe('GET /api/history', () => {
   test('mauvais code → 403', async () => {
     const res = await request(server).get('/api/history?code=wrong');

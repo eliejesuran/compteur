@@ -145,6 +145,32 @@ function recordHistoryCoarse() {
   }
 }
 
+// Pic d'occupation (max de `c`) sur les DEUX séries + le total courant. Calculé côté
+// serveur : sinon le client devait télécharger tout l'historique juste pour l'afficher,
+// et stats.html ne lisait que la série fine → le « pic » n'était que celui des 48 dernières
+// heures. Le grossier n'échantillonne qu'un point / 5 min : un pic très bref entre deux
+// échantillons hors fenêtre fine reste invisible (limite de la rétention, pas du calcul).
+function maxC(arr) {
+  let m = 0;
+  for (const h of arr) if (h.c > m) m = h.c;
+  return m;
+}
+
+function eventPeak(evt) {
+  return Math.max(maxC(evt.history ?? []), maxC(evt.historyCoarse ?? []), eventTotal(evt));
+}
+
+// Découpe demandée par le client. L'historique complet (fin 48h + grossier 60j) pèse
+// jusqu'à ~1,6 Mo : stats.html le retéléchargeait intégralement toutes les 60 s.
+function sliceHistory(evt, since, series) {
+  const from = Number(since);
+  const cut = (arr) => (Number.isFinite(from) && from > 0) ? arr.filter(h => h.t >= from) : arr;
+  return {
+    history:       series === 'coarse' ? [] : cut(evt.history ?? []),
+    historyCoarse: series === 'fine'   ? [] : cut(evt.historyCoarse ?? []),
+  };
+}
+
 function ensureSeenOps(id) {
   if (!eventSeenOps.has(id)) eventSeenOps.set(id, new Set());
   return eventSeenOps.get(id);
@@ -421,7 +447,9 @@ app.post('/api/groups', (req, res) => {
   res.json({ id, name: groupName });
 });
 
-// History + per-group stats — admin or perm
+// History + per-group stats — admin or perm.
+// `since` (ms epoch) borne les deux séries, `series` (fine|coarse|all) évite d'envoyer
+// celle dont le client n'a pas besoin. Sans paramètre : tout, comme avant (export XLSX).
 app.get('/api/history', (req, res) => {
   if (!checkAuth(req.query.code)) return res.status(403).json({ error: 'forbidden' });
   const evt = state.events[req.query.e];
@@ -429,11 +457,13 @@ app.get('/api/history', (req, res) => {
   if (backfillCoarse(evt)) scheduleSave(); // reconstruit la série grossière si absente
   const totalIn  = Object.values(evt.groups).reduce((s, g) => s + g.totalIn, 0);
   const totalOut = Object.values(evt.groups).reduce((s, g) => s + g.totalOut, 0);
+  const { history, historyCoarse } = sliceHistory(evt, req.query.since, req.query.series);
   res.json({
-    history: evt.history,
-    historyCoarse: evt.historyCoarse ?? [],
+    history,
+    historyCoarse,
     total: eventTotal(evt),
     capacity: evt.capacity,
+    peak: eventPeak(evt),
     totalIn, totalOut,
     groups: Object.values(evt.groups).map(g => ({
       id: g.id, name: g.name,

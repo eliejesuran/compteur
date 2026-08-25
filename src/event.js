@@ -41,6 +41,26 @@ function downsampleCoarse(fine) {
   return out;
 }
 
+// Pic d'occupation (max de `c`) sur les DEUX séries — calculé serveur pour que le client
+// n'ait plus à télécharger tout l'historique juste pour l'afficher (stats.html ne lisait
+// que la série fine → « pic » limité aux 48 dernières heures).
+function maxC(arr) {
+  let m = 0;
+  for (const h of arr) if (h.c > m) m = h.c;
+  return m;
+}
+
+// Découpe demandée par le client : `since` (ms) borne les deux séries, `series`
+// (fine|coarse|all) évite d'envoyer celle dont il n'a pas besoin. Sans paramètre : tout.
+function sliceHistory(hist, coarse, since, series) {
+  const from = Number(since);
+  const cut = (arr) => (Number.isFinite(from) && from > 0) ? arr.filter(h => h.t >= from) : arr;
+  return {
+    history:       series === 'coarse' ? [] : cut(hist),
+    historyCoarse: series === 'fine'   ? [] : cut(coarse),
+  };
+}
+
 function hexId() {
   const b = new Uint8Array(3);
   crypto.getRandomValues(b);
@@ -414,11 +434,16 @@ export class EventDO extends DurableObject {
     if (path === '/history' && request.method === 'GET') {
       const totalIn  = Object.values(this._s.groups).reduce((s, g) => s + g.totalIn,  0);
       const totalOut = Object.values(this._s.groups).reduce((s, g) => s + g.totalOut, 0);
+      const { history, historyCoarse } = sliceHistory(
+        this._hist, this._histCoarse,
+        url.searchParams.get('since'), url.searchParams.get('series'),
+      );
       return Response.json({
-        history:       this._hist,
-        historyCoarse: this._histCoarse,
+        history,
+        historyCoarse,
         total:    this._total(),
         capacity: this._s.capacity,
+        peak:     Math.max(maxC(this._hist), maxC(this._histCoarse), this._total()),
         totalIn, totalOut,
         groups: Object.values(this._s.groups).map(g => ({
           id: g.id, name: g.name, count: g.count,

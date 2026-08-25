@@ -1,5 +1,6 @@
 import { SELF, env, runInDurableObject } from 'cloudflare:test';
 import { describe, it, expect } from 'vitest';
+import { wrlCheck } from '../../src/index.js';
 
 // R5 — tests d'intégration du Worker CF.
 // SELF.fetch() exerce index.js (routeur + auth) → EventDO / RegistryDO réels.
@@ -457,6 +458,88 @@ describe('POST /api/reset-counts — remet à 0 sans effacer l\'historique', () 
     expect(r.status).toBe(200);
     const s = await state(e, groups[0].id);
     expect(s.body.total).toBe(0);
+  });
+});
+
+// ── /api/history fenêtré + pic serveur ───────────────────────────────────────
+
+describe('GET /api/history — since / series / peak', () => {
+  it('since et series allègent la charge utile, peak reste complet', async () => {
+    const { id: e, groups } = await createEvent('Fenêtre');
+    const g = groups[0].id;
+    await count(e, g, 5, 'p1');
+
+    const stub = env.EVENT.get(env.EVENT.idFromName(e));
+    await runInDurableObject(stub, (inst) => inst.alarm()); // échantillon à 5
+    await count(e, g, -5, 'p2');
+    await runInDurableObject(stub, (inst) => inst.alarm()); // échantillon à 0
+
+    const q = (extra) => `${BASE}/api/history?${new URLSearchParams({ code: ADMIN, e, ...extra })}`;
+
+    const tout = await (await SELF.fetch(q({}))).json();
+    expect(tout.history.length).toBeGreaterThanOrEqual(2);
+    expect(tout.peak).toBe(5); // le pic survit à la redescente à 0
+
+    // series=coarse → la série fine n'est pas transmise, mais le pic reste juste
+    const coarse = await (await SELF.fetch(q({ series: 'coarse' }))).json();
+    expect(coarse.history).toEqual([]);
+    expect(coarse.peak).toBe(5);
+
+    // since dans le futur → aucun point transmis, pic toujours complet
+    const vide = await (await SELF.fetch(q({ since: String(Date.now() + 60_000) }))).json();
+    expect(vide.history).toEqual([]);
+    expect(vide.historyCoarse).toEqual([]);
+    expect(vide.peak).toBe(5);
+
+    // libère le slot registre (plafond MAX_EVENTS partagé par tout le fichier)
+    await SELF.fetch(`${BASE}/api/admin/config`, J({ code: ADMIN, e, deleteEvent: true }));
+  });
+});
+
+// ── Garde d'entrée du Worker : ids invalides + bucket global (S4bis / L3bis) ──
+
+describe('Garde d\'entrée du Worker', () => {
+  it('rejette les ids non hexadécimaux sans réveiller de DO, laisse passer les valides', async () => {
+    for (const bad of ['../etc', 'ZZZZZZ', 'a'.repeat(64), '<script>', '']) {
+      const r = await SELF.fetch(`${BASE}/api/state?e=${encodeURIComponent(bad)}&g=abc123`);
+      expect([400, 404]).toContain(r.status); // '' → 400 (param manquant), sinon 404
+      const c = await SELF.fetch(`${BASE}/api/count`, J({ e: bad, g: 'abc123', delta: 1, uuid: 'x' }));
+      expect([400, 404]).toContain(c.status);
+    }
+
+    // …et un id légitime passe toujours
+    const { id: e, groups } = await createEvent('Valide');
+    const ok = await SELF.fetch(`${BASE}/api/state?e=${e}&g=${groups[0].id}`);
+    expect(ok.status).toBe(200);
+    await SELF.fetch(`${BASE}/api/admin/config`, J({ code: ADMIN, e, deleteEvent: true }));
+  });
+
+  // Le rate-limit de l'EventDO est PAR EVENT : faire varier `e` donnait un bucket neuf
+  // de 300 jetons à chaque id, donc L3 ne tenait que face à un client honnête.
+  // On sollicite wrlCheck directement (comme le test du bucket DO plus haut) : 800 tirs
+  // HTTP réels noient workerd, et le bucket est un état de module partagé par tout le
+  // fichier — le vider sous l'IP par défaut ferait échouer les tests suivants en 429.
+  it('le bucket Worker plafonne le burst, indépendamment de l\'event visé', () => {
+    const ip = '203.0.113.7'; // IP dédiée : n'affecte pas les autres tests
+    let ok = 0;
+    for (let i = 0; i < 800; i++) if (wrlCheck(ip)) ok++;
+    expect(ok).toBeGreaterThan(0);
+    expect(ok).toBeLessThan(800); // le burst est bien borné
+  });
+
+  it('/api/count consulte ce bucket AVANT de réveiller le DO', async () => {
+    const ip = '203.0.113.8';
+    for (let i = 0; i < 800; i++) wrlCheck(ip); // bucket vidé pour cette IP
+
+    // event volontairement inconnu : sans le bucket Worker, la requête réveillait un DO
+    // (facturé, bucket neuf) pour répondre 404. Ici elle est arrêtée en amont.
+    const r = await SELF.fetch(`${BASE}/api/count`, {
+      method: 'POST',
+      headers: { 'cf-connecting-ip': ip, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ e: 'ffffff', g: 'abc123', delta: 1, uuid: 'rl1' }),
+    });
+    expect(r.status).toBe(429);
+    expect(r.headers.get('Retry-After')).toBe('1');
   });
 });
 

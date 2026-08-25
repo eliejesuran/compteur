@@ -339,6 +339,13 @@ function esc(s) {
                   .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
+// Query string TOUJOURS encodée. Le code admin est libre (min. 4 car.) : un `&`, `+`,
+// `#` ou une espace dedans coupait l'URL en deux — la connexion passait (elle encodait)
+// mais tous les autres appels partaient avec un code tronqué → 403 incompréhensibles.
+function qs(params) {
+  return new URLSearchParams(params).toString();
+}
+
 // ── Login ──
 
 async function login() {
@@ -392,7 +399,7 @@ async function loadAll() {
 }
 
 async function loadEvents() {
-  const data = await fetchT(`/api/events?code=${adminCode}`).then(r => r.json()).catch(() => ({ events: [] }));
+  const data = await fetchT(`/api/events?${qs({ code: adminCode })}`).then(r => r.json()).catch(() => ({ events: [] }));
   events = data.events || [];
   if (data.role) userRole = data.role;
 }
@@ -426,7 +433,7 @@ async function loadEventUI(id) {
   if (evt.groups.length > 0) loadQR(evt.groups[0].id);
 
   try {
-    const cd = await fetchT(`/api/clients?code=${adminCode}&e=${id}`).then(r => r.json());
+    const cd = await fetchT(`/api/clients?${qs({ code: adminCode, e: id })}`).then(r => r.json());
     updateOperatorList(cd.clients);
   } catch {}
 }
@@ -466,7 +473,7 @@ function renderQRSelector(groups) {
 async function loadQR(groupId) {
   if (!groupId || !currentEvent) return;
   try {
-    const qd = await fetchT(`/api/qr?code=${adminCode}&e=${currentEvent}&g=${groupId}`).then(r => r.json());
+    const qd = await fetchT(`/api/qr?${qs({ code: adminCode, e: currentEvent, g: groupId })}`).then(r => r.json());
     document.getElementById('qr-img').src = qd.qr;
     document.getElementById('qr-url').innerHTML =
       `<a href="${esc(qd.url)}" target="_blank" rel="noopener">${esc(qd.url)}</a>`;
@@ -477,7 +484,7 @@ async function loadIPs() {
   const el = document.getElementById('ip-list');
   if (el.dataset.loaded) return;
   try {
-    const ipd = await fetchT(`/api/ips?code=${adminCode}`).then(r => r.json());
+    const ipd = await fetchT(`/api/ips?${qs({ code: adminCode })}`).then(r => r.json());
     if (ipd.ips && ipd.ips.length) {
       el.innerHTML = `Adresses réseau :<br>` +
         ipd.ips.map(ip => `<a href="http://${ip}:${ipd.port}" target="_blank">http://${ip}:${ipd.port}</a>`).join('<br>');
@@ -535,18 +542,12 @@ function startWS(eventId) {
   myWs.onopen = () => {
     wsReconnectDelay = 1000;
     loadIPs();
-    fetchT(`/api/history?code=${adminCode}&e=${eventId}`)
-      .then(r => r.json())
-      .then(d => {
-        if (currentEvent !== eventId) return;
-        const evt = events.find(e => e.id === eventId);
-        if (evt && d.groups) {
-          evt.total = d.total; evt.groups = d.groups;
-          renderGroupTable(d.groups, d.total, evt.capacity);
-        }
-      })
-      .catch(() => {});
-    fetchT(`/api/clients?code=${adminCode}&e=${eventId}`)
+    // Pas de fetch /api/history ici : le message WS `init` qui suit immédiatement porte
+    // déjà total + groups + capacity et alimente renderGroupTable via onmessage. L'appel
+    // rapatriait jusqu'à ~1,6 Mo d'historique pour deux valeurs — à CHAQUE ouverture de
+    // WS, donc à chaque déverrouillage du téléphone (visibilitychange → wsReconnectNow).
+    // L'export XLSX reste le seul consommateur de /api/history côté admin.
+    fetchT(`/api/clients?${qs({ code: adminCode, e: eventId })}`)
       .then(r => r.json())
       .then(d => { if (currentEvent === eventId) updateOperatorList(d.clients); })
       .catch(() => {});
@@ -774,7 +775,7 @@ async function savePermCode() {
 
 // U15: gestion des événements archivés
 async function loadArchived() {
-  const data = await fetchT(`/api/events/archived?code=${adminCode}`).then(r => r.json()).catch(() => ({ events: [] }));
+  const data = await fetchT(`/api/events/archived?${qs({ code: adminCode })}`).then(r => r.json()).catch(() => ({ events: [] }));
   archivedEvents = data.events || [];
   const card = document.getElementById('card-archived');
   document.getElementById('archived-count').textContent = archivedEvents.length;
@@ -872,7 +873,7 @@ async function deleteArchivedEvent() {
 async function exportXLSX() {
   if (!currentEvent || typeof XLSX === 'undefined') return;
   try {
-    const data = await fetchT(`/api/history?code=${adminCode}&e=${currentEvent}`).then(r => r.json());
+    const data = await fetchT(`/api/history?${qs({ code: adminCode, e: currentEvent })}`).then(r => r.json());
     const evt  = events.find(e => e.id === currentEvent);
     const wb   = XLSX.utils.book_new();
     const fmt  = t => new Date(t).toLocaleString('fr-FR');

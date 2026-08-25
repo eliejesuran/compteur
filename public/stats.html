@@ -191,6 +191,35 @@ function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
+// Query string TOUJOURS encodée : un `&`, `+` ou `#` dans le code admin coupait l'URL
+// en deux → le serveur recevait un code tronqué et répondait 403.
+function qs(params) {
+  return new URLSearchParams(params).toString();
+}
+
+// Ne rapatrie QUE la fenêtre affichée : l'historique complet (fin 48 h + grossier 60 j)
+// atteint ~1,6 Mo, et il était retéléchargé intégralement toutes les 60 s.
+// `series` évite d'envoyer la série que la fenêtre courante n'utilise pas.
+function historyParams() {
+  const p = { code: adminCode, e: currentEvent, series: usesFineSeries() ? 'fine' : 'coarse' };
+  if (chartWindowH > 0) p.since = String(Date.now() - chartWindowH * 3600_000);
+  return p;
+}
+
+function fetchHistory() {
+  return fetchT(`/api/history?${qs(historyParams())}`).then(r => r.json());
+}
+
+// N'écrase que la série effectivement demandée : l'autre est renvoyée vide par le
+// serveur (`series`), la remplacer effacerait des données encore affichables.
+function applyHistory(d) {
+  if (usesFineSeries()) fullHistory = d.history || [];
+  else fullHistoryCoarse = d.historyCoarse || [];
+  totalIn = d.totalIn ?? totalIn;
+  if (d.peak != null && d.peak > peak) peak = d.peak;
+  capacity = d.capacity ?? capacity;
+}
+
 function fetchT(url, opts, ms = 6000) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), ms);
@@ -259,11 +288,14 @@ async function switchEvent(id) {
 // ── Load stats for an event ──
 
 async function loadEventStats(eventId) {
-  const data = await fetchT(`/api/history?code=${adminCode}&e=${eventId}`).then(r => r.json());
+  const data = await fetchHistory();
 
+  // Pic fourni par le serveur : il balaie les DEUX séries (jusqu'à 60 j). Le calculer ici
+  // sur `data.history` ne voyait que la fenêtre fine → le pic « repartait » toutes les 48 h,
+  // et depuis le fetch fenêtré on n'a de toute façon plus l'historique complet sous la main.
   capacity = data.capacity;
   totalIn  = data.totalIn ?? 0;
-  peak     = data.history.length ? Math.max(...data.history.map(h => h.c), data.total) : data.total;
+  peak     = data.peak ?? data.total;
 
   document.getElementById('s-cap').textContent  = capacity;
   document.getElementById('s-in').textContent   = totalIn;
@@ -461,8 +493,13 @@ function buildChart(history, currentTotal, cap, groups) {
 
 // Choisit la série + filtre selon la fenêtre. ≤48h (rétention fine) → fine (avec groupes) ;
 // au-delà / début → grossière 5min (total seul, pas de lignes par groupe).
+// Fenêtre ≤48 h → série fine (rétention fine, lignes par groupe) ; au-delà → grossière.
+function usesFineSeries() {
+  return chartWindowH > 0 && chartWindowH <= 48;
+}
+
 function selectedSeries() {
-  const fine = chartWindowH > 0 && chartWindowH <= 48;
+  const fine = usesFineSeries();
   const src  = fine ? fullHistory : fullHistoryCoarse;
   const points = chartWindowH
     ? src.filter(h => h.t >= Date.now() - chartWindowH * 3600_000)
@@ -500,9 +537,18 @@ function updateLivePoint() {
 }
 
 // Changement de fenêtre temporelle (boutons 2h / 6h / 24h / 48h / 7j / 30j / Début)
-function setRange(h, btn) {
+// Changement de fenêtre → il faut redemander les données : depuis le fetch fenêtré on ne
+// détient plus tout l'historique côté client. En cas d'échec réseau on redessine quand
+// même avec ce qu'on a plutôt que de laisser le graphe figé.
+async function setRange(h, btn) {
   chartWindowH = h;
   document.querySelectorAll('#range-btns button').forEach(b => b.classList.toggle('active', b === btn));
+  try {
+    const d = await fetchHistory();
+    applyHistory(d);
+    document.getElementById('s-in').textContent = totalIn;
+    document.getElementById('s-peak').textContent = peak;
+  } catch {}
   renderChart();
 }
 
@@ -543,14 +589,12 @@ function connectWS(eventId) {
     if (msg.type === 'pong') return;
     if (msg.type === 'init') {
       updateCount(msg.total);
-      fetchT(`/api/history?code=${adminCode}&e=${currentEvent}`)
-        .then(r => r.json())
+      fetchHistory()
         .then(d => {
           if (currentEvent !== eventId) return;
-          totalIn = d.totalIn ?? totalIn;
+          applyHistory(d);
           document.getElementById('s-in').textContent = totalIn;
-          fullHistory = d.history || fullHistory;
-          fullHistoryCoarse = d.historyCoarse || fullHistoryCoarse;
+          document.getElementById('s-peak').textContent = peak;
           lastTotal = msg.total;
           renderChart();
         })
@@ -604,14 +648,12 @@ document.addEventListener('visibilitychange', () => {
 // récupère les nouveaux échantillons (le live entre deux échantillons vient du WS).
 setInterval(() => {
   if (!currentEvent || document.hidden) return;
-  fetchT(`/api/history?code=${adminCode}&e=${currentEvent}`)
-    .then(r => r.json())
+  fetchHistory()
     .then(d => {
-      fullHistory = d.history || fullHistory;
-      fullHistoryCoarse = d.historyCoarse || fullHistoryCoarse;
       // Resync du cumul : le +delta optimiste du WS peut dériver (bornage au 0 du total).
-      totalIn = d.totalIn ?? totalIn;
+      applyHistory(d);
       document.getElementById('s-in').textContent = totalIn;
+      document.getElementById('s-peak').textContent = peak;
       if (!statsWs || statsWs.readyState !== 1) lastTotal = d.total; // pas de WS → total du fetch
       renderChart();
     })

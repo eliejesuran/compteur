@@ -3,6 +3,9 @@ import { EventDO    } from './event.js';
 
 export { RegistryDO, EventDO };
 
+// Exportés pour les tests (le Worker lui-même passe par son export default)
+export { wrlCheck, badId };
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function hexId() {
@@ -23,6 +26,42 @@ function iReq(path, method = 'GET', body = null, headers = null) {
 function eventStub(env, eventId) {
   return env.EVENT.get(env.EVENT.idFromName(eventId));
 }
+
+// ── Garde d'entrée (S4bis / L3bis) ─────────────────────────────────────────────
+// Tous les ids viennent de hexId() → hexadécimal. Rejeter le reste AVANT d'appeler
+// idFromName() évite de réveiller un EventDO (facturé, et bucket de rate-limit neuf)
+// pour n'importe quelle chaîne envoyée par un inconnu. Fourchette large : la longueur
+// pourra passer de 6 à 8-10 hex (S4) sans retoucher ce garde.
+const ID_RE = /^[0-9a-f]{4,32}$/;
+const badId = (...ids) => ids.some(v => typeof v !== 'string' || !ID_RE.test(v));
+
+// Token bucket par IP AU NIVEAU DU WORKER. Celui de l'EventDO est par-event : un
+// attaquant qui faisait varier `e` obtenait un bucket neuf de 300 jetons à chaque id,
+// donc le rate-limit L3 ne tenait que face à un client honnête.
+// LIMITE ASSUMÉE : cet état est local à l'isolate, et Cloudflare en fait tourner
+// plusieurs (par colo, recyclés) → c'est une mitigation, pas une garantie stricte.
+// La version dure passerait par le binding Rate Limiting de Cloudflare.
+// Plafonds > à ceux du DO : un lieu derrière une seule IP peut faire tourner
+// plusieurs events/portes en parallèle sans être bridé.
+const WRL_CAPACITY = 600; // burst
+const WRL_RATE     = 40;  // tokens/s
+const _wrl = new Map();   // ip → {tokens, lastMs}
+
+function wrlCheck(ip) {
+  const now = Date.now();
+  if (_wrl.size > 500) {
+    for (const [k, v] of _wrl) if (now - v.lastMs > 3_600_000) _wrl.delete(k);
+  }
+  let b = _wrl.get(ip);
+  if (!b) { b = { tokens: WRL_CAPACITY, lastMs: now }; _wrl.set(ip, b); }
+  b.tokens = Math.min(WRL_CAPACITY, b.tokens + ((now - b.lastMs) / 1000) * WRL_RATE);
+  b.lastMs = now;
+  if (b.tokens < 1) return false;
+  b.tokens -= 1;
+  return true;
+}
+
+const clientIP = (request) => request.headers.get('cf-connecting-ip') ?? 'unknown';
 
 function registryStub(env) {
   return env.REGISTRY.get(env.REGISTRY.idFromName('registry'));
@@ -56,6 +95,10 @@ export default {
     if (request.headers.get('Upgrade') === 'websocket') {
       const e = url.searchParams.get('e');
       if (!e) return new Response('Missing e', { status: 400 });
+      if (badId(e)) return new Response('Not found', { status: 404 });
+      if (!wrlCheck(clientIP(request))) {
+        return new Response('Too Many Requests', { status: 429, headers: { 'Retry-After': '1' } });
+      }
       return eventStub(env, e).fetch(request);
     }
 
@@ -80,8 +123,14 @@ async function handleAPI(request, env, url, path) {
   if (path === '/api/count' && method === 'POST') {
     const { e, g } = body ?? {};
     if (!e || !g) return Response.json({ error: 'e and g required' }, { status: 400 });
+    if (badId(e, g)) return Response.json({ error: 'event not found' }, { status: 404 });
     // N2: transmettre l'IP réelle au DO — sinon le token bucket voit 'unknown' pour tous
-    const ip = request.headers.get('cf-connecting-ip') ?? 'unknown';
+    const ip = clientIP(request);
+    // L3bis : bucket Worker (par IP, tous events confondus) AVANT de réveiller le DO —
+    // celui du DO est par-event, donc contournable en faisant varier `e`.
+    if (!wrlCheck(ip)) {
+      return new Response('Too Many Requests', { status: 429, headers: { 'Retry-After': '1' } });
+    }
     return eventStub(env, e).fetch(iReq('/count', 'POST', body, { 'cf-connecting-ip': ip }));
   }
 
@@ -89,7 +138,11 @@ async function handleAPI(request, env, url, path) {
     const e = url.searchParams.get('e');
     const g = url.searchParams.get('g');
     if (!e || !g) return Response.json({ error: 'e and g required' }, { status: 400 });
-    return eventStub(env, e).fetch(iReq(`/state?g=${g}`));
+    if (badId(e, g)) return Response.json({ error: 'event not found' }, { status: 404 });
+    if (!wrlCheck(clientIP(request))) {
+      return new Response('Too Many Requests', { status: 429, headers: { 'Retry-After': '1' } });
+    }
+    return eventStub(env, e).fetch(iReq(`/state?g=${encodeURIComponent(g)}`));
   }
 
   // ── Auth ───────────────────────────────────────────────────────────────────
@@ -158,7 +211,14 @@ async function handleAPI(request, env, url, path) {
   if (path === '/api/history' && method === 'GET') {
     const e = url.searchParams.get('e');
     if (!e) return Response.json({ error: 'e required' }, { status: 400 });
-    return eventStub(env, e).fetch(iReq('/history'));
+    // `since`/`series` transmis au DO : le client ne rapatrie que la fenêtre affichée.
+    const qs = new URLSearchParams();
+    for (const k of ['since', 'series']) {
+      const v = url.searchParams.get(k);
+      if (v) qs.set(k, v);
+    }
+    const q = qs.toString();
+    return eventStub(env, e).fetch(iReq(q ? `/history?${q}` : '/history'));
   }
 
   // Remise à zéro des compteurs sans effacer l'historique — admin + perm (pas adminOnly)
