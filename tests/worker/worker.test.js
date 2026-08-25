@@ -163,6 +163,66 @@ describe('Archivage', () => {
     const { events } = await r.json();
     expect(events.find(ev => ev.id === e)).toBeUndefined();
   });
+
+  // Régression : le garde `archived → 404` était placé AVANT le handler /config, donc
+  // `archived:false` ne l'atteignait jamais. Le registre était quand même mis à jour →
+  // event listé comme actif mais DO archivé : 404 sur state/count/history, WS 4004, et
+  // plus supprimable depuis l'UI (le bouton n'existe que dans la liste des archivés).
+  it('désarchive → l\'event redevient pleinement fonctionnel (pas de zombie)', async () => {
+    const { id: e, groups } = await createEvent('Zombie');
+    const g = groups[0].id;
+    await count(e, g, 5, 'avant-archive');
+
+    await SELF.fetch(`${BASE}/api/admin/config`, J({ code: ADMIN, e, archived: true }));
+    const un = await SELF.fetch(`${BASE}/api/admin/config`, J({ code: ADMIN, e, archived: false }));
+    expect(un.status).toBe(200);
+
+    // de retour dans la liste active…
+    const { events } = await (await SELF.fetch(`${BASE}/api/events?code=${ADMIN}`)).json();
+    expect(events.find(ev => ev.id === e)).toBeDefined();
+
+    // …et le DO répond vraiment, avec ses compteurs intacts
+    const st = await state(e, g);
+    expect(st.status).toBe(200);
+    expect(st.body.total).toBe(5);
+
+    const hist = await SELF.fetch(`${BASE}/api/history?code=${ADMIN}&e=${e}`);
+    expect(hist.status).toBe(200);
+
+    const c = await count(e, g, 1, 'apres-desarchive');
+    expect(c.status).toBe(200);
+    expect((await c.json()).total).toBe(6);
+  });
+
+  it('désarchive → le WS opérateur se rouvre (plus de 4004)', async () => {
+    const { id: e, groups } = await createEvent('WS');
+    const g = groups[0].id;
+    await SELF.fetch(`${BASE}/api/admin/config`, J({ code: ADMIN, e, archived: true }));
+    await SELF.fetch(`${BASE}/api/admin/config`, J({ code: ADMIN, e, archived: false }));
+
+    const r = await SELF.fetch(`${BASE}/?e=${e}&g=${g}`, { headers: { Upgrade: 'websocket' } });
+    expect(r.status).toBe(101);
+    r.webSocket?.accept();
+    r.webSocket?.close();
+  });
+
+  it('registre non désynchronisé si le DO refuse le /config', async () => {
+    // Entrée registre dont le DO n'a jamais été /init → /config répond 404.
+    // index.js ne doit alors PAS propager la metadata au registre, sinon les deux
+    // divergent (c'est ce mécanisme qui rendait le zombie ci-dessus irréversible).
+    const reg = env.REGISTRY.get(env.REGISTRY.idFromName('registry'));
+    await runInDurableObject(reg, (inst) => inst.fetch(new Request('http://do/events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'deadbe', name: 'Fantôme' }),
+    })));
+
+    const r = await SELF.fetch(`${BASE}/api/admin/config`, J({ code: ADMIN, e: 'deadbe', name: 'Renommé' }));
+    expect(r.status).toBe(404);
+
+    const { events } = await (await SELF.fetch(`${BASE}/api/events?code=${ADMIN}`)).json();
+    expect(events.find(ev => ev.id === 'deadbe')?.name).toBe('Fantôme');
+  });
 });
 
 describe('Suppression (deleteEvent → terminate/purge N4)', () => {

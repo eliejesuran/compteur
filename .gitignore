@@ -1,5 +1,7 @@
 node_modules/
 state.json
+state.json.tmp
+state.json.corrupt-*
 .env
 *.log
 .DS_Store

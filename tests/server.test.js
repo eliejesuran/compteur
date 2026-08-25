@@ -5,8 +5,16 @@ const assert = require('node:assert/strict');
 const request = require('supertest');
 const WebSocket = require('ws');
 const { randomUUID } = require('node:crypto');
+const fs   = require('node:fs');
+const os   = require('node:os');
+const path = require('node:path');
 
-const { server, state, eventSeenOps, trimSeenOps, wsClients, recentlyDisconnected, rlBuckets, buildSnapshot, applySnapshot, recordHistory, recordHistoryCoarse } = require('../server');
+// AVANT le require de server.js : /api/count déclenche scheduleSave() → sans cette
+// redirection la suite écrasait le state.json d'exploitation avec ses fixtures.
+const TMP_STATE = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'compteur-test-')), 'state.json');
+process.env.STATE_FILE = TMP_STATE;
+
+const { server, state, eventSeenOps, trimSeenOps, wsClients, recentlyDisconnected, rlBuckets, buildSnapshot, applySnapshot, recordHistory, recordHistoryCoarse, flushSave } = require('../server');
 
 const ARCHIVED_EVT_ID = 'archevt';
 
@@ -834,6 +842,48 @@ describe('archivage — fermeture WS (N5)', () => {
 });
 
 // ── Persistance seenOps — C1 ─────────────────────────────────────────────────
+
+// ── Écriture atomique de state.json ──────────────────────────────────────────
+// L'ancien flushSave écrivait directement sur state.json : un crash pendant l'écriture
+// (elle a lieu toutes les 30 s ET 500 ms après chaque comptage) laissait un JSON tronqué,
+// illisible au boot → état vidé puis réécrit. On vérifie ici le contrat qui l'empêche :
+// passage par un .tmp, aucun résidu, et state.json toujours relisible d'un bout à l'autre.
+
+describe('Persistance — écriture atomique', () => {
+  test('les tests n\'écrivent PAS dans le state.json du projet', () => {
+    assert.notEqual(TMP_STATE, path.join(__dirname, '..', 'state.json'));
+    assert.ok(TMP_STATE.startsWith(os.tmpdir()), 'STATE_FILE doit pointer vers un tmpdir');
+  });
+
+  test('flushSave produit un state.json complet et relisible', () => {
+    state.events[EVT_ID].groups[GRP_ID].count = 42;
+    flushSave();
+    const parsed = JSON.parse(fs.readFileSync(TMP_STATE, 'utf8'));
+    assert.equal(parsed.events[EVT_ID].groups[GRP_ID].count, 42);
+    assert.equal(parsed.adminCode, 'admin123');
+  });
+
+  test('flushSave ne laisse aucun fichier .tmp derrière lui', () => {
+    flushSave();
+    assert.equal(fs.existsSync(`${TMP_STATE}.tmp`), false, '.tmp orphelin après écriture');
+  });
+
+  test('une écriture qui échoue laisse le state.json précédent intact', () => {
+    state.events[EVT_ID].groups[GRP_ID].count = 7;
+    flushSave();
+    const avant = fs.readFileSync(TMP_STATE, 'utf8');
+
+    // .tmp rendu impossible à créer (répertoire à la place du fichier) → openSync throw
+    fs.mkdirSync(`${TMP_STATE}.tmp`);
+    try {
+      state.events[EVT_ID].groups[GRP_ID].count = 999;
+      flushSave(); // ne doit pas jeter, et ne doit pas toucher state.json
+      assert.equal(fs.readFileSync(TMP_STATE, 'utf8'), avant, 'state.json a été abîmé');
+    } finally {
+      fs.rmdirSync(`${TMP_STATE}.tmp`);
+    }
+  });
+});
 
 describe('Persistance seenOps (C1)', () => {
   test('buildSnapshot inclut les seenOps sous forme de tableau', () => {

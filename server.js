@@ -7,7 +7,9 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const STATE_FILE = path.join(__dirname, 'state.json');
+// Surchargeable par env : les tests importent server.js et déclenchent scheduleSave()
+// via /api/count — sans ça la suite écrase le state.json d'exploitation avec ses fixtures.
+const STATE_FILE = process.env.STATE_FILE || path.join(__dirname, 'state.json');
 
 // R4/L1/L2 : plafonds anti-saturation (DoS doux) — alignés sur le Worker CF
 const MAX_EVENTS = 50;   // événements au total (archivés inclus)
@@ -206,9 +208,29 @@ function applySnapshot(data) {
 
 let _saveTimer = null;
 
+// Écriture ATOMIQUE : fichier temporaire → fsync → rename.
+// Un fs.writeFileSync direct sur STATE_FILE laissait un state.json tronqué si le
+// process mourait pendant l'écriture (elle a lieu toutes les 30 s ET 500 ms après
+// chaque comptage → fenêtre large). Au boot le JSON.parse échouait, l'état repartait
+// à vide et le fichier était écrasé 30 s plus tard : soirée perdue, sans récupération.
+// rename() est atomique sur le même système de fichiers → state.json est soit l'ancien
+// contenu complet, soit le nouveau, jamais un fragment.
 function flushSave() {
   _saveTimer = null;
-  try { fs.writeFileSync(STATE_FILE, JSON.stringify(buildSnapshot()), 'utf8'); } catch (e) { console.error('[save]', e.message); }
+  const tmp = `${STATE_FILE}.tmp`;
+  let fd = null;
+  try {
+    fd = fs.openSync(tmp, 'w');
+    fs.writeSync(fd, JSON.stringify(buildSnapshot()));
+    fs.fsyncSync(fd); // les octets sont sur le disque avant le rename (coupure de courant)
+    fs.closeSync(fd);
+    fd = null;
+    fs.renameSync(tmp, STATE_FILE);
+  } catch (e) {
+    console.error('[save]', e.message);
+    if (fd !== null) { try { fs.closeSync(fd); } catch {} }
+    try { fs.unlinkSync(tmp); } catch {} // pas de .tmp orphelin
+  }
 }
 
 function scheduleSave() {
@@ -650,7 +672,15 @@ if (require.main === module) {
         console.log('Ancien format ignoré — état réinitialisé.');
       }
     } catch {
-      console.warn('Impossible de lire state.json.');
+      // Fichier illisible : on le met de côté au lieu de démarrer à vide puis de
+      // l'écraser au premier flushSave (30 s) — il reste analysable/récupérable à la main.
+      const bak = `${STATE_FILE}.corrupt-${Date.now()}`;
+      try {
+        fs.renameSync(STATE_FILE, bak);
+        console.warn(`state.json illisible → conservé dans ${path.basename(bak)}`);
+      } catch {
+        console.warn('Impossible de lire state.json.');
+      }
     }
   }
 
@@ -690,4 +720,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, server, state, eventSeenOps, trimSeenOps, wsClients, recentlyDisconnected, rlBuckets, checkAdmin, checkAuth, buildSnapshot, applySnapshot, recordHistory, recordHistoryCoarse, backfillCoarse };
+module.exports = { app, server, state, eventSeenOps, trimSeenOps, wsClients, recentlyDisconnected, rlBuckets, checkAdmin, checkAuth, buildSnapshot, applySnapshot, recordHistory, recordHistoryCoarse, backfillCoarse, flushSave, STATE_FILE };

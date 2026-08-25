@@ -253,6 +253,54 @@ export class EventDO extends DurableObject {
       return Response.json({ ok: true });
     }
 
+    // POST /config — AVANT le garde archived→404.
+    // Placé après, `archived:false` n'atteignait jamais ce handler : le désarchivage
+    // renvoyait 404 alors que index.js mettait quand même le registre à jour → event
+    // listé comme actif mais DO toujours archivé = zombie (404 sur state/count/history,
+    // WS 4004) et plus supprimable depuis l'UI. Le serveur local n'a jamais eu ce garde
+    // sur /api/admin/config : on s'aligne dessus.
+    if (path === '/config' && request.method === 'POST') {
+      if (!this._s) return Response.json({ error: 'event not found' }, { status: 404 });
+      const { g, capacity, reset, name, archived, deleteGroup } = body ?? {};
+      if (g) {
+        const grp = this._s.groups[g];
+        if (grp) {
+          if (typeof name === 'string' && name.trim()) grp.name = name.trim().slice(0, 40);
+          if (deleteGroup === true) {
+            if (Object.keys(this._s.groups).length > 1) delete this._s.groups[g];
+            else return Response.json({ ok: false, error: 'cannot delete last group' });
+          }
+          if (reset === true) { grp.count = 0; grp.totalIn = 0; grp.totalOut = 0; grp.opStats = {}; }
+        }
+      } else {
+        if (Number.isFinite(capacity) && capacity > 0) this._s.capacity = Math.round(capacity);
+        if (typeof name === 'string' && name.trim()) this._s.name = name.trim().slice(0, 40);
+        if (archived === true) {
+          this._s.archived = true;
+          // N5 : fermer les WS (4004) → l'opérateur passe hors ligne au lieu de taper dans le vide.
+          for (const ws of this.ctx.getWebSockets()) { try { ws.close(4004, 'Event archived'); } catch {} }
+        }
+        if (archived === false) {
+          const wasArchived = this._s.archived;
+          this._s.archived = false;
+          if (wasArchived) await this.ctx.storage.setAlarm(Date.now() + FINE_INTERVAL_MS);
+        }
+        if (reset === true) {
+          for (const grp of Object.values(this._s.groups)) {
+            grp.count = 0; grp.totalIn = 0; grp.totalOut = 0; grp.opStats = {};
+          }
+          this._hist = [];
+          this._histCoarse = [];
+          await this._saveHistory();
+          await this._saveHistoryCoarse();
+          this._seen.clear();
+        }
+      }
+      await this._save();
+      this._broadcast(0);
+      return Response.json({ ok: true });
+    }
+
     if (!this._s || this._s.archived) {
       return Response.json({ error: 'event not found' }, { status: 404 });
     }
@@ -369,47 +417,6 @@ export class EventDO extends DurableObject {
       });
     }
 
-    // POST /config
-    if (path === '/config' && request.method === 'POST') {
-      const { g, capacity, reset, name, archived, deleteGroup } = body ?? {};
-      if (g) {
-        const grp = this._s.groups[g];
-        if (grp) {
-          if (typeof name === 'string' && name.trim()) grp.name = name.trim().slice(0, 40);
-          if (deleteGroup === true) {
-            if (Object.keys(this._s.groups).length > 1) delete this._s.groups[g];
-            else return Response.json({ ok: false, error: 'cannot delete last group' });
-          }
-          if (reset === true) { grp.count = 0; grp.totalIn = 0; grp.totalOut = 0; grp.opStats = {}; }
-        }
-      } else {
-        if (Number.isFinite(capacity) && capacity > 0) this._s.capacity = Math.round(capacity);
-        if (typeof name === 'string' && name.trim()) this._s.name = name.trim().slice(0, 40);
-        if (archived === true) {
-          this._s.archived = true;
-          // N5 : fermer les WS (4004) → l'opérateur passe hors ligne au lieu de taper dans le vide.
-          for (const ws of this.ctx.getWebSockets()) { try { ws.close(4004, 'Event archived'); } catch {} }
-        }
-        if (archived === false) {
-          const wasArchived = this._s.archived;
-          this._s.archived = false;
-          if (wasArchived) await this.ctx.storage.setAlarm(Date.now() + FINE_INTERVAL_MS);
-        }
-        if (reset === true) {
-          for (const grp of Object.values(this._s.groups)) {
-            grp.count = 0; grp.totalIn = 0; grp.totalOut = 0; grp.opStats = {};
-          }
-          this._hist = [];
-          this._histCoarse = [];
-          await this._saveHistory();
-          await this._saveHistoryCoarse();
-          this._seen.clear();
-        }
-      }
-      await this._save();
-      this._broadcast(0);
-      return Response.json({ ok: true });
-    }
 
     // GET /clients
     if (path === '/clients' && request.method === 'GET') {

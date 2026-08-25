@@ -198,8 +198,9 @@ async function handleAPI(request, env, url, path) {
       const configResp = await eventStub(env, e).fetch(
         iReq('/config', 'POST', { g, capacity, reset, name, archived, deleteGroup })
       );
-      // Sync metadata vers le registre si le nom/capacité/archivé a changé
-      if (name !== undefined || capacity !== undefined || archived !== undefined) {
+      // Sync metadata vers le registre — SEULEMENT si le DO a accepté. Sinon registre et
+      // DO divergent : l'event est listé comme actif mais répond 404 partout (zombie).
+      if (configResp.ok && (name !== undefined || capacity !== undefined || archived !== undefined)) {
         await registryStub(env).fetch(
           iReq('/events/update', 'POST', { id: e, name, capacity, archived })
         );
