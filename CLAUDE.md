@@ -78,6 +78,8 @@ Backoff reco 1s→…→30s, reset sur succès/switch. `wsReconnectNow()` sur `v
 - **Suppression event (N4)** : `/terminate` AVANT le garde archived→404 ; ferme WS 4004 + `deleteAll()` + `deleteAlarm()` + reset mémoire ; `index.js` n'efface le registre que si purge OK (502 sinon, terminate idempotent).
 - **`/config` AUSSI avant le garde archived→404** (`event.js`, avec son propre `if (!this._s) → 404`) : placé après, `archived:false` n'atteignait jamais le handler → le désarchivage renvoyait 404 pendant que `index.js` mettait quand même le registre à jour → **event zombie** (listé actif, mais 404 sur state/count/history + WS 4004, et plus supprimable depuis l'UI qui ne propose Supprimer que dans la liste des archivés). Le local n'a jamais eu ce garde sur `/api/admin/config` : cloud aligné dessus. **Règle générale : tout ce qui doit pouvoir *sortir* un event de l'état archivé se place avant le garde.**
 - **Registre synchronisé seulement si le DO accepte** : `index.js` ne poste `/events/update` que si `configResp.ok`. Sinon registre et DO divergent — c'est ce qui rendait le zombie ci-dessus irréversible.
+- **Suppression de groupe = fermeture des WS du groupe (N5bis)** : `deleteGroup` ferme en 4004 les sockets dont `groupId === g` (server.js **et** event.js), comme l'archivage le fait pour l'event. Sans ça l'opérateur gardait le point vert, l'UI optimiste continuait de monter, et chaque `/api/count` répondait 404 → **la file jetait les ops en silence** (`4xx → shift()`) : comptage perdu sans aucun signal. Ne coupe que le groupe visé — les autres opérateurs de l'event continuent (testé).
+- **Jamais de donnée interpolée dans un `onclick` (N7/N7bis)** : `esc()` produit `&#39;` pour une apostrophe, que le parseur HTML **redécode en `'` avant** l'analyse JS → la chaîne se referme trop tôt, `SyntaxError` silencieuse, bouton inerte. « Soirée d'ouverture » suffisait à casser le bouton Supprimer de la liste des archivés. Règle : `data-*` + délégation (un listener posé une fois sur le conteneur, car `innerHTML` est réécrit), et le libellé relu depuis l'état + `textContent`. `esc()` reste correct pour le **contenu** ; le piège n'existe que dans un attribut d'événement.
 - **Grâce déco (U4)** : `recentlyDisconnected`/`_recentlyDisc` — op visible 30s après déco, retrait via setTimeout, clé `${eventId}:${name}`.
 - **Cache QR (T1)** : `_qrCache={url,qr}` mémoire DO, invalidé si URL change. `generateQR` dans event.js ; index.js délègue via `/qr?g=X&url=X`.
 - **Persistance lien op (U19)** : localStorage `op_last_link={e,g}`. Écrit au boot si URL porte `e&g` ; relu si absents (PWA `start_url=/`) → `EVENT_ID/GROUP_ID` (`let`) restaurés + `history.replaceState`. Chaque op de la queue garde ses `e/g`. Lien mort → 4004 → saisie manuelle (U16).
@@ -98,7 +100,7 @@ Faits : U1 (Wake Lock), U3 (lien admin → bandeau), U4 (grâce déco), U16 (sai
 ## Bugs ouverts & robustesse
 > Revue 2026-06-11 / 06-12. Items corrigés → voir l'historique git ; ci-dessous = **ouvert**.
 
-**Fonctionnels** — tous corrigés (voir git) : **B7** (op_last_state, cf. invariants), **N5** (archive ferme WS 4004), **N6** (`genUUID()` : fallback si `crypto.randomUUID` absent en LAN http), **N7** (esc + renameGroup sans interpolation du nom), **N8** (hello 1/s/WS + broadcast si nom change), **N9** (ping serveur→client), **N10** (timeout fan-out).
+**Fonctionnels** — tous corrigés (voir git) : **B7** (op_last_state, cf. invariants), **N5** (archive ferme WS 4004), **N5bis** (suppression de groupe ferme les WS de CE groupe), **N6** (`genUUID()` : fallback si `crypto.randomUUID` absent en LAN http), **N7** (esc + renameGroup sans interpolation du nom), **N7bis** (liste archivés : data-* + délégation, plus de nom dans un onclick), **N8** (hello 1/s/WS + broadcast si nom change), **N9** (ping serveur→client), **N10** (timeout fan-out).
 
 **Sécurité**
 - **S1** Code admin en query param GET (logs, historique, Referer). → `Authorization: Bearer`, query en fallback.
@@ -125,4 +127,5 @@ npm test            # tous (local node:test + worker vitest-pool-workers)
 npm run test:local  # serveur Express (tests/server.test.js)
 npm run test:worker # Worker CF (tests/worker/*.test.js, runtime workerd)
 ```
+Tests WS (node:test) : **borner le `timeout` ET fermer le socket dans `t.after()`** — un test qui attend un `close` qui n'arrive jamais laisse une connexion ouverte, et le `server.close()` du hook `after()` ne résout alors jamais : la suite pend (7 min observées) au lieu d'échouer.
 Code admin par défaut : `admin123`. Tests Worker : RegistryDO singleton, cache mémoire persiste entre tests (isolatedStorage = storage seul) → scoper les assertions par id.

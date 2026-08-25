@@ -800,13 +800,28 @@ function renderArchived() {
     list.innerHTML = '<p style="font-size:13px;color:var(--muted);font-style:italic;padding-top:8px">Aucun événement archivé.</p>';
     return;
   }
+  // N7bis : PAS de nom interpolé dans un onclick. esc() produit &#39; pour une apostrophe,
+  // que le parseur HTML redécode en ' AVANT l'analyse JS → la chaîne se referme trop tôt
+  // et le handler ne compile pas (SyntaxError silencieuse). « Soirée d'ouverture » suffisait
+  // à rendre le bouton Supprimer inerte. On passe par data-* + délégation, le nom est relu
+  // depuis l'état — même approche que renameGroup (N7).
   list.innerHTML = archivedEvents.map(e => `
     <div class="arch-row">
       <span>${esc(e.name)}</span>
-      <button class="secondary" onclick="unarchiveEvent('${esc(e.id)}')">Désarchiver</button>
-      <button class="danger"    onclick="confirmDeleteEvent('${esc(e.id)}','${esc(e.name)}')">Supprimer</button>
+      <button class="secondary" data-act="unarchive" data-id="${esc(e.id)}">Désarchiver</button>
+      <button class="danger"    data-act="delete"    data-id="${esc(e.id)}">Supprimer</button>
     </div>`).join('');
 }
+
+// Délégation posée une seule fois : renderArchived() réécrit le innerHTML à chaque
+// chargement, un listener par bouton serait reposé à chaque fois.
+document.getElementById('archived-list').addEventListener('click', (ev) => {
+  const btn = ev.target.closest('button[data-act]');
+  if (!btn) return;
+  const id = btn.dataset.id;
+  if (btn.dataset.act === 'unarchive') unarchiveEvent(id);
+  else if (btn.dataset.act === 'delete') confirmDeleteEvent(id);
+});
 
 async function unarchiveEvent(id) {
   const res = await fetchT('/api/admin/config', {
@@ -819,7 +834,10 @@ async function unarchiveEvent(id) {
   }
 }
 
-function confirmDeleteEvent(id, name) {
+function confirmDeleteEvent(id) {
+  // Nom relu depuis l'état (jamais transporté par le DOM) + textContent → aucun échappement
+  // à faire, et une apostrophe ou un chevron dans le nom ne casse plus rien.
+  const name = archivedEvents.find(e => e.id === id)?.name ?? id;
   document.getElementById('delete-confirm-name').textContent = name;
   document.getElementById('delete-confirm-id').value = id;
   document.getElementById('delete-confirm-dialog').showModal();

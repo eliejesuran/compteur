@@ -473,6 +473,15 @@ app.post('/api/admin/config', (req, res) => {
         if (deleteGroup === true) {
           if (Object.keys(evt.groups).length > 1) {
             delete evt.groups[g];
+            // N5bis : fermer les WS des opérateurs de CE groupe, comme à l'archivage.
+            // Sans ça ils gardaient le point vert, l'UI optimiste continuait de monter,
+            // et chaque /api/count répondait 404 → la file jetait les ops en silence
+            // (4xx → shift()). Un opérateur pouvait compter une heure dans le vide.
+            for (const [ws, c] of wsClients) {
+              if (c.eventId === e && c.groupId === g && ws.readyState < 2) {
+                ws.close(4004, 'Group deleted');
+              }
+            }
           } else {
             return res.json({ ok: false, error: 'cannot delete last group' });
           }

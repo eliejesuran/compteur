@@ -841,6 +841,63 @@ describe('archivage — fermeture WS (N5)', () => {
   });
 });
 
+// ── Suppression de groupe — fermeture WS (N5bis) ─────────────────────────────
+// Sans ça, l'opérateur du groupe supprimé gardait le point vert, l'UI optimiste
+// continuait de monter et chaque /api/count répondait 404 → la file jetait les ops
+// en silence (4xx → shift()). Comptage perdu sans le moindre signal à l'écran.
+
+describe('suppression de groupe — fermeture WS (N5bis)', () => {
+  // timeout borné : sans le correctif le close n'arrive jamais → doit ÉCHOUER vite,
+  // pas bloquer la CI en attendant un événement qui ne viendra pas.
+  test('l\'opérateur du groupe supprimé reçoit close 4004', { timeout: 5000 }, (t, done) => {
+    // 2e groupe pour que la suppression soit permise (le dernier est protégé)
+    request(server).post('/api/groups')
+      .send({ code: 'admin123', e: EVT_ID, name: 'Sortie' })
+      .end((_e, res) => {
+        const victime = res.body.id;
+        const ws = new WebSocket(wsUrl(victime));
+        // Si le test échoue (régression : pas de close), le socket doit quand même partir —
+        // sinon le server.close() du hook after() ne résout jamais et la suite pend.
+        t.after(() => { try { ws.terminate(); } catch {} });
+        ws.once('message', () => {
+          request(server).post('/api/admin/config')
+            .send({ code: 'admin123', e: EVT_ID, g: victime, deleteGroup: true })
+            .end(() => {});
+          ws.on('close', (code) => {
+            assert.equal(code, 4004, 'doit fermer avec code 4004');
+            done();
+          });
+        });
+        ws.on('error', done);
+      });
+  });
+
+  test('les opérateurs des AUTRES groupes ne sont pas déconnectés', { timeout: 5000 }, (t, done) => {
+    request(server).post('/api/groups')
+      .send({ code: 'admin123', e: EVT_ID, name: 'Sortie' })
+      .end((_e, res) => {
+        const victime = res.body.id;
+        const survivant = new WebSocket(wsUrl(GRP_ID)); // reste sur le groupe Principal
+        t.after(() => { try { survivant.terminate(); } catch {} });
+        let ferme = false;
+        survivant.on('close', () => { ferme = true; });
+        survivant.once('message', () => {
+          request(server).post('/api/admin/config')
+            .send({ code: 'admin123', e: EVT_ID, g: victime, deleteGroup: true })
+            .end(() => {
+              setTimeout(() => {
+                assert.equal(ferme, false, 'un op d\'un autre groupe ne doit pas être coupé');
+                assert.equal(survivant.readyState, WebSocket.OPEN);
+                survivant.close();
+                done();
+              }, 120);
+            });
+        });
+        survivant.on('error', done);
+      });
+  });
+});
+
 // ── Persistance seenOps — C1 ─────────────────────────────────────────────────
 
 // ── Écriture atomique de state.json ──────────────────────────────────────────

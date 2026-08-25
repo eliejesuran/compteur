@@ -225,6 +225,36 @@ describe('Archivage', () => {
   });
 });
 
+describe('Suppression de groupe — fermeture WS (N5bis)', () => {
+  it('coupe le WS des opérateurs du groupe supprimé, pas des autres', async () => {
+    const { id: e, groups } = await createEvent('Portes');
+    const gPrincipal = groups[0].id;
+    const gVictime = (await (await SELF.fetch(`${BASE}/api/groups`, J({ code: ADMIN, e, name: 'Sortie' }))).json()).id;
+
+    const openWS = async (g) => {
+      const r = await SELF.fetch(`${BASE}/?e=${e}&g=${g}`, { headers: { Upgrade: 'websocket' } });
+      expect(r.status).toBe(101);
+      const ws = r.webSocket;
+      const closed = new Promise((res) => ws.addEventListener('close', (ev) => res(ev.code)));
+      ws.accept();
+      return { ws, closed };
+    };
+
+    const victime   = await openWS(gVictime);
+    const survivant = await openWS(gPrincipal);
+
+    await SELF.fetch(`${BASE}/api/admin/config`, J({ code: ADMIN, e, g: gVictime, deleteGroup: true }));
+
+    // l'op du groupe supprimé est éjecté…
+    expect(await victime.closed).toBe(4004);
+
+    // …celui du groupe restant continue de compter normalement
+    const c = await count(e, gPrincipal, 1, 'apres-suppression');
+    expect(c.status).toBe(200);
+    survivant.ws.close();
+  });
+});
+
 describe('Suppression (deleteEvent → terminate/purge N4)', () => {
   it('purge le DO : /api/state 404 après suppression', async () => {
     const { id: e, groups } = await createEvent();

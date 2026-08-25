@@ -267,8 +267,18 @@ export class EventDO extends DurableObject {
         if (grp) {
           if (typeof name === 'string' && name.trim()) grp.name = name.trim().slice(0, 40);
           if (deleteGroup === true) {
-            if (Object.keys(this._s.groups).length > 1) delete this._s.groups[g];
-            else return Response.json({ ok: false, error: 'cannot delete last group' });
+            if (Object.keys(this._s.groups).length > 1) {
+              delete this._s.groups[g];
+              // N5bis : fermer les WS des opérateurs de CE groupe, comme à l'archivage.
+              // Sans ça ils gardaient le point vert, l'UI optimiste continuait de monter,
+              // et chaque /count répondait 404 → la file jetait les ops en silence.
+              for (const ws of this.ctx.getWebSockets()) {
+                const a = ws.deserializeAttachment() ?? {};
+                if (a.groupId === g) { try { ws.close(4004, 'Group deleted'); } catch {} }
+              }
+            } else {
+              return Response.json({ ok: false, error: 'cannot delete last group' });
+            }
           }
           if (reset === true) { grp.count = 0; grp.totalIn = 0; grp.totalOut = 0; grp.opStats = {}; }
         }
