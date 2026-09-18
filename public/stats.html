@@ -493,9 +493,14 @@ function buildChart(history, currentTotal, cap, groups) {
 
 // Choisit la série + filtre selon la fenêtre. ≤48h (rétention fine) → fine (avec groupes) ;
 // au-delà / début → grossière 5min (total seul, pas de lignes par groupe).
-// Fenêtre ≤48 h → série fine (rétention fine, lignes par groupe) ; au-delà → grossière.
+// Rétention de la série fine, en HEURES = MAX_HISTORY x FINE_INTERVAL_MS côté serveur
+// (4320 pts x 30 s = 36 h). Constante dupliquée : à réaligner si la cadence change.
+// Au-delà, la fine ne couvre plus la fenêtre → on bascule sur la grossière (5 min), qui
+// la couvre vraiment. La vue 48 h passe donc en 5 min, sans lignes par groupe.
+const FINE_RETENTION_H = 36;
+
 function usesFineSeries() {
-  return chartWindowH > 0 && chartWindowH <= 48;
+  return chartWindowH > 0 && chartWindowH <= FINE_RETENTION_H;
 }
 
 function selectedSeries() {

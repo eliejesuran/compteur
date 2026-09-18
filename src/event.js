@@ -3,8 +3,14 @@ import QRCode from 'qrcode';
 
 const MAX_GROUPS = 20;  // R4/L1 : groupes max par événement
 const MAX_OPS    = 100; // R4/L2 : opérateurs distincts trackés (opStats) par groupe
-const MAX_HISTORY = 2880; // points d'historique FIN max (48h @ 60s) — aligné local/cloud
-const FINE_INTERVAL_MS   = 60 * 1000;      // cadence de l'alarme (était 30 s → 24h ; 60 s → 48h)
+// Historique FIN : 1 point / 30 s, plafond 4320 pts = 36 h de détail.
+// 30 s (et non 60 s) : besoin métier = sortir un événement de 24 h point par point
+// toutes les 30 s. 4320 et non 2880 (= pile 24 h) car un event NON ARCHIVÉ continue
+// d'être échantillonné : à 2880 le buffer glisse d'une heure du DÉBUT de l'événement
+// par heure d'attente avant l'export. 36 h = 24 h d'événement + 12 h pour exporter.
+// Budget : 4320 x ~307 o = 1,27 Mo à 20 groupes (limite DO 2 Mo/clé) ; ~0,5 Mo à 6 groupes.
+const MAX_HISTORY = 4320; // — aligné local/cloud
+const FINE_INTERVAL_MS   = 30 * 1000;      // 30 s — cadence de l'alarme (aligné local/cloud)
 // Série GROSSIÈRE (total seul) : 1 pt / 5 min, 17280 pts = 60 jours (clé DO séparée).
 const MAX_HISTORY_COARSE = 17280;
 const COARSE_INTERVAL_MS  = 5 * 60 * 1000; // 5 min
@@ -109,7 +115,7 @@ export class EventDO extends DurableObject {
     this._s          = s    ?? null;
     this._seen       = new Set(seen ?? []);
     this._histCoarse = histCoarse ?? [];
-    // Historique dans une clé séparée (écrite seulement par l'alarme, 60 s) → _save()
+    // Historique dans une clé séparée (écrite seulement par l'alarme, 30 s) → _save()
     // par comptage reste léger. Migration des events existants : historique inline dans `state`.
     if (this._s && Array.isArray(this._s.history)) {
       this._hist = this._s.history;
@@ -119,8 +125,8 @@ export class EventDO extends DurableObject {
       this._hist = hist ?? [];
     }
     // Backfill : event antérieur à la série grossière (clé absente) → reconstruit
-    // depuis l'historique fin (jusqu'à 48h dispo) pour que les vues longues ne
-    // démarrent pas à vide. Données > 48h jamais stockées → non récupérables.
+    // depuis l'historique fin (jusqu'à 36h dispo) pour que les vues longues ne
+    // démarrent pas à vide. Données > 36h jamais stockées → non récupérables.
     if (this._histCoarse.length === 0 && this._hist.length > 0) {
       this._histCoarse = downsampleCoarse(this._hist).slice(-MAX_HISTORY_COARSE);
       this.ctx.waitUntil(this._saveHistoryCoarse());
@@ -584,7 +590,7 @@ export class EventDO extends DurableObject {
     } catch {}
   }
 
-  // ── Alarme — historique toutes les 60 s ────────────────────────────────────
+  // ── Alarme — historique toutes les 30 s ────────────────────────────────────
 
   async alarm() {
     await this._load();
@@ -595,7 +601,8 @@ export class EventDO extends DurableObject {
     if (this._hist.length > MAX_HISTORY) this._hist.shift();
     await this._saveHistory();
 
-    // Série grossière (total seul) toutes les ~5 min (alarme cadencée à 60 s).
+    // Série grossière (total seul) toutes les ~5 min (alarme cadencée à 30 s : 300 s est
+    // un multiple de 30 s, donc le point grossier tombe pile, sans dérive).
     const lastC = this._histCoarse[this._histCoarse.length - 1];
     if (!lastC || now - lastC.t >= COARSE_INTERVAL_MS - 5_000) {
       this._histCoarse.push({ t: now, c: this._total(), ...this._cumulIO() });

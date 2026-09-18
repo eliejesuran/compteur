@@ -15,8 +15,14 @@ const STATE_FILE = process.env.STATE_FILE || path.join(__dirname, 'state.json');
 const MAX_EVENTS = 50;   // événements au total (archivés inclus)
 const MAX_GROUPS = 20;   // groupes par événement
 const MAX_OPS    = 100;  // opérateurs distincts (opStats) par groupe
-const MAX_HISTORY = 2880; // points d'historique FIN max (48h @ 60s) — aligné local/cloud
-const FINE_INTERVAL_MS   = 60 * 1000;      // 1 min (était 30 s → 24h ; 60 s → 48h de détail)
+// Historique FIN : 1 point / 30 s, plafond 4320 pts = 36 h de détail.
+// 30 s (et non 60 s) : besoin métier = sortir un événement de 24 h point par point
+// toutes les 30 s. 4320 et non 2880 (= pile 24 h) car un event NON ARCHIVÉ continue
+// d'être échantillonné : à 2880 le buffer glisse d'une heure du DÉBUT de l'événement
+// par heure d'attente avant l'export. 36 h = 24 h d'événement + 12 h pour exporter.
+// Budget : 4320 x ~307 o = 1,27 Mo à 20 groupes (limite DO 2 Mo/clé) ; ~0,5 Mo à 6 groupes.
+const MAX_HISTORY = 4320; // — aligné local/cloud
+const FINE_INTERVAL_MS   = 30 * 1000;      // 30 s — cadence du setInterval (aligné local/cloud)
 // Série GROSSIÈRE (total seul) : 1 pt / 5 min, 17280 pts = 60 jours. Pour les vues longues
 // (7j/30j/début) sans exploser le stockage (2 Mo/clé cloud). Aligné local/cloud.
 const MAX_HISTORY_COARSE = 17280;
@@ -101,7 +107,9 @@ function historyPoint(evt) {
   return { t: Date.now(), c: eventTotal(evt), ...cumulIO(evt), g };
 }
 
-// Échantillonne l'historique de tous les events actifs (appelé toutes les 60 s)
+// Échantillonne l'historique de tous les events actifs (appelé toutes les 30 s).
+// N'échantillonne PAS un event archivé → archiver en fin d'événement fige la série fine
+// et protège le début contre le glissement du buffer.
 function recordHistory() {
   for (const evt of Object.values(state.events)) {
     if (evt.archived) continue;
@@ -125,7 +133,7 @@ function downsampleCoarse(fine) {
 }
 
 // Backfill : event sans série grossière (antérieur à la feature) → reconstruit depuis
-// l'historique fin (jusqu'à 48h dispo). Renvoie true si une reconstruction a eu lieu.
+// l'historique fin (jusqu'à 36h dispo). Renvoie true si une reconstruction a eu lieu.
 function backfillCoarse(evt) {
   if ((evt.historyCoarse?.length ?? 0) === 0 && evt.history?.length > 0) {
     evt.historyCoarse = downsampleCoarse(evt.history).slice(-MAX_HISTORY_COARSE);
@@ -160,8 +168,8 @@ function eventPeak(evt) {
   return Math.max(maxC(evt.history ?? []), maxC(evt.historyCoarse ?? []), eventTotal(evt));
 }
 
-// Découpe demandée par le client. L'historique complet (fin 48h + grossier 60j) pèse
-// jusqu'à ~1,6 Mo : stats.html le retéléchargeait intégralement toutes les 60 s.
+// Découpe demandée par le client. L'historique complet (fin 36h @30s + grossier 60j) pèse
+// jusqu'à ~2 Mo : stats.html le retéléchargeait intégralement toutes les 60 s.
 function sliceHistory(evt, since, series) {
   const from = Number(since);
   const cut = (arr) => (Number.isFinite(from) && from > 0) ? arr.filter(h => h.t >= from) : arr;
@@ -759,4 +767,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, server, state, eventSeenOps, trimSeenOps, wsClients, recentlyDisconnected, rlBuckets, checkAdmin, checkAuth, buildSnapshot, applySnapshot, recordHistory, recordHistoryCoarse, backfillCoarse, flushSave, STATE_FILE };
+module.exports = { app, server, state, eventSeenOps, trimSeenOps, wsClients, recentlyDisconnected, rlBuckets, checkAdmin, checkAuth, buildSnapshot, applySnapshot, recordHistory, recordHistoryCoarse, backfillCoarse, flushSave, STATE_FILE, MAX_HISTORY, FINE_INTERVAL_MS, MAX_HISTORY_COARSE, COARSE_INTERVAL_MS };

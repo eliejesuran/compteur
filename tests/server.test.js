@@ -14,7 +14,7 @@ const path = require('node:path');
 const TMP_STATE = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'compteur-test-')), 'state.json');
 process.env.STATE_FILE = TMP_STATE;
 
-const { server, state, eventSeenOps, trimSeenOps, wsClients, recentlyDisconnected, rlBuckets, buildSnapshot, applySnapshot, recordHistory, recordHistoryCoarse, flushSave } = require('../server');
+const { server, state, eventSeenOps, trimSeenOps, wsClients, recentlyDisconnected, rlBuckets, buildSnapshot, applySnapshot, recordHistory, recordHistoryCoarse, flushSave, MAX_HISTORY, FINE_INTERVAL_MS } = require('../server');
 
 const ARCHIVED_EVT_ID = 'archevt';
 
@@ -1280,11 +1280,62 @@ describe('Historique par groupe', () => {
     assert.equal(last.g[GRP_ID], 4);
   });
 
-  test('plafonne à MAX_HISTORY (2880) points', () => {
+  test('plafonne à MAX_HISTORY points', () => {
     const e = evt();
-    for (let i = 0; i < 2880; i++) e.history.push({ t: i, c: 0, g: {} });
+    for (let i = 0; i < MAX_HISTORY; i++) e.history.push({ t: i, c: 0, g: {} });
     recordHistory();
-    assert.equal(e.history.length, 2880, 'shift maintient le plafond');
+    assert.equal(e.history.length, MAX_HISTORY, 'shift maintient le plafond');
+  });
+});
+
+// ── Besoin métier : sortir un événement de 24 h point par point toutes les 30 s ──
+// C'est le contrat d'exploitation. Ces tests échouent si quelqu'un remonte la cadence
+// ou rabote la rétention sans mesurer les conséquences.
+
+describe('Contrat : 24 h de détail à 30 s', () => {
+  test('la cadence fine est bien de 30 s', () => {
+    assert.equal(FINE_INTERVAL_MS, 30_000);
+  });
+
+  test('un événement de 24 h tient ENTIÈREMENT dans la série fine', () => {
+    const pts24h = (24 * 3600 * 1000) / FINE_INTERVAL_MS;
+    assert.equal(pts24h, 2880);
+    assert.ok(MAX_HISTORY >= pts24h,
+      `MAX_HISTORY (${MAX_HISTORY}) doit couvrir les ${pts24h} points d'un événement de 24 h`);
+  });
+
+  test('marge d\'au moins 6 h APRÈS la fin pour exporter sans perdre le début', () => {
+    // Un event non archivé continue d'être échantillonné : le buffer glisse et mange
+    // le DÉBUT de l'événement. La marge = rétention − durée de l'événement.
+    const margeH = (MAX_HISTORY * FINE_INTERVAL_MS) / 3600000 - 24;
+    assert.ok(margeH >= 6, `marge d'export de ${margeH} h — trop courte`);
+  });
+
+  test('24 h réelles échantillonnées → 2880 points espacés de 30 s exactement', () => {
+    const e = evt();
+    const T0 = Date.UTC(2026, 8, 18, 18, 0, 0);
+    const vrai = Date.now;
+    try {
+      let horloge = T0;
+      Date.now = () => horloge;
+      e.history = [];
+      for (let i = 0; i < 2880; i++) { recordHistory(); horloge += FINE_INTERVAL_MS; }
+
+      assert.equal(e.history.length, 2880);
+      const ecarts = new Set();
+      for (let i = 1; i < e.history.length; i++) ecarts.add(e.history[i].t - e.history[i - 1].t);
+      assert.deepEqual([...ecarts], [30_000], 'tous les points espacés de 30 s');
+      assert.equal(e.history.at(-1).t - e.history[0].t, 24 * 3600 * 1000 - 30_000);
+    } finally { Date.now = vrai; }
+  });
+
+  test('budget stockage DO : série fine pleine sous la limite de 2 Mo/clé', () => {
+    const groupes = {};
+    for (let i = 0; i < 20; i++) groupes['g' + i.toString(16).padStart(5, '0')] = 400;
+    const pt = { t: 1789000000000, c: 8000, i: 99999, o: 91999, g: groupes };
+    const octets = JSON.stringify(pt).length * MAX_HISTORY;
+    assert.ok(octets < 2 * 1024 * 1024,
+      `${(octets / 1048576).toFixed(2)} Mo à 20 groupes — dépasse la limite DO de 2 Mo/clé`);
   });
 });
 

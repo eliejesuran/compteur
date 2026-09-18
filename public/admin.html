@@ -895,7 +895,7 @@ async function exportXLSX() {
       ['Total sorties', data.totalOut],
       [],
       ['Période couverte', merged.length ? `${fmt(merged[0].t)} → ${fmt(merged[merged.length - 1].t)}` : '—'],
-      ['Série détaillée', '1 point / minute — 48 h glissantes'],
+      ['Série détaillée', '1 point / 30 secondes — 36 h glissantes'],
       ['Série long terme', '1 point / 5 minutes — 60 jours glissants'],
       ['Exporté le', fmt(Date.now())],
       [],

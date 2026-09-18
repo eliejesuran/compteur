@@ -543,6 +543,76 @@ describe('Garde d\'entrée du Worker', () => {
   });
 });
 
+// ── Contrat métier : 24 h de détail à 30 s (cloud) ───────────────────────────
+// L'alarme réécrit TOUTE la clé `history` à chaque tir. Passer de 60 s à 30 s double ce
+// volume : on vérifie ici que la série pleine reste sous la limite DO et que l'alarme
+// reste rapide, sinon l'échantillonnage dérive en prod.
+
+describe('Contrat cloud : 24 h de détail à 30 s', () => {
+  it('l\'alarme replanifie bien à 30 s', async () => {
+    const { id: e } = await createEvent('Cadence');
+    const stub = env.EVENT.get(env.EVENT.idFromName(e));
+    const ecart = await runInDurableObject(stub, async (inst, ctx) => {
+      await inst.alarm();
+      return (await ctx.storage.getAlarm()) - Date.now();
+    });
+    expect(ecart).toBeGreaterThan(25_000);
+    expect(ecart).toBeLessThanOrEqual(30_000);
+    await SELF.fetch(`${BASE}/api/admin/config`, J({ code: ADMIN, e, deleteEvent: true }));
+  });
+
+  it('série fine pleine (36 h) : sous 2 Mo/clé et alarme rapide', async () => {
+    const { id: e, groups } = await createEvent('Plein');
+    const stub = env.EVENT.get(env.EVENT.idFromName(e));
+
+    const mesure = await runInDurableObject(stub, async (inst) => {
+      // 20 groupes = pire cas du plafond MAX_GROUPS
+      for (let i = 0; i < 20; i++) inst._s.groups['g' + i.toString(16).padStart(5, '0')] = {
+        id: 'g' + i.toString(16).padStart(5, '0'), name: 'G' + i,
+        count: 400, totalIn: 900, totalOut: 500, opStats: {},
+      };
+      // série fine remplie au plafond
+      inst._hist = Array.from({ length: 4320 }, (_, k) => inst._historyPoint());
+      const octets = JSON.stringify(inst._hist).length;
+
+      const t0 = Date.now();
+      await inst.alarm();          // écrit la clé `history` entière
+      const dureeAlarme = Date.now() - t0;
+
+      return { octets, dureeAlarme, points: inst._hist.length };
+    });
+
+    expect(mesure.points).toBe(4320);                    // le shift a maintenu le plafond
+    expect(mesure.octets).toBeLessThan(2 * 1024 * 1024); // limite DO par clé
+    // L'alarme doit rester très loin des 30 s de son propre cycle
+    expect(mesure.dureeAlarme).toBeLessThan(5_000);
+    console.log(`  série fine pleine : ${(mesure.octets / 1048576).toFixed(2)} Mo | alarme ${mesure.dureeAlarme} ms`);
+
+    await SELF.fetch(`${BASE}/api/admin/config`, J({ code: ADMIN, e, deleteEvent: true }));
+  }, 30000);
+
+  it('relit 24 h de points via /api/history sans perte', async () => {
+    const { id: e, groups } = await createEvent('Export24');
+    const stub = env.EVENT.get(env.EVENT.idFromName(e));
+    const T0 = Date.UTC(2026, 8, 18, 18, 0, 0);
+
+    await runInDurableObject(stub, async (inst) => {
+      inst._hist = Array.from({ length: 2880 }, (_, k) => ({
+        t: T0 + k * 30_000, c: k % 500, i: k, o: 0, g: { [groups[0].id]: k % 500 },
+      }));
+      await inst._saveHistory();
+    });
+
+    const d = await (await SELF.fetch(`${BASE}/api/history?${new URLSearchParams({ code: ADMIN, e })}`)).json();
+    expect(d.history).toHaveLength(2880);
+    const ecarts = new Set(d.history.slice(1).map((h, i) => h.t - d.history[i].t));
+    expect([...ecarts]).toEqual([30_000]);
+    expect(d.history.at(-1).t - d.history[0].t).toBe(24 * 3600 * 1000 - 30_000);
+
+    await SELF.fetch(`${BASE}/api/admin/config`, J({ code: ADMIN, e, deleteEvent: true }));
+  }, 30000);
+});
+
 // ⚠️ Doit rester le DERNIER bloc : il remplit le registre jusqu'au plafond.
 describe('Plafond événements (R4/L1) — 50 au total', () => {
   async function totalEvents() {
