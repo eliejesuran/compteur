@@ -667,6 +667,21 @@ setInterval(() => {
     })
     .catch(() => {});
 }, 60_000);
+
+// Arrivée par la connexion « Graphiques » d'admin.html : code transmis par sessionStorage,
+// lu une fois puis effacé (jamais dans l'URL). Formulaire masqué pendant la vérification
+// pour éviter un flash ; réaffiché (code pré-rempli) si la connexion échoue.
+(function autoLogin() {
+  let code = null;
+  try { code = sessionStorage.getItem('stats_code'); sessionStorage.removeItem('stats_code'); } catch {}
+  if (!code) return;
+  const loginView = document.getElementById('login-view');
+  loginView.style.display = 'none';
+  document.getElementById('code').value = code;
+  loadStats().catch(() => {}).finally(() => {
+    if (document.getElementById('stats-view').style.display !== 'block') loginView.style.display = '';
+  });
+})();
 </script>
 </body>
 </html>

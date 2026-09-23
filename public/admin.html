@@ -130,6 +130,18 @@
     }
     /* Logo */
     .logo-bar { margin-bottom: 14px; display: flex; align-items: center; justify-content: space-between; }
+    .logo-left { display: flex; align-items: center; gap: 6px; }
+    /* Flèche retour vers l'écran opérateur — visible seulement si on vient de la roue (?from=op) */
+    #back-op {
+      display: none; width: 32px; height: 32px; margin-left: -6px;
+      align-items: center; justify-content: center;
+      color: var(--muted); text-decoration: none; border-radius: 8px;
+      touch-action: manipulation;
+    }
+    #back-op.show { display: flex; }
+    #back-op:hover { color: var(--text); }
+    #back-op:active { background: var(--border); }
+    .section-title { margin-top: 28px; }
     .guide-link { font-size: 12px; color: var(--muted); text-decoration: none; }
     .guide-link:hover { color: var(--accent); }
     .app-logo { height: 28px; width: auto; display: block; }
@@ -141,8 +153,15 @@
 <div id="bxl-bg" aria-hidden="true"><pre id="bxl-art"></pre></div>
 
 <div class="logo-bar">
-  <img id="logo-dark"  class="app-logo" src="/logo_white.png" alt="" aria-hidden="true">
-  <img id="logo-light" class="app-logo" src="/logo.png"       alt="" aria-hidden="true">
+  <div class="logo-left">
+    <a id="back-op" href="/" title="Retour au comptage" aria-label="Retour au comptage">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/>
+      </svg>
+    </a>
+    <img id="logo-dark"  class="app-logo" src="/logo_white.png" alt="" aria-hidden="true">
+    <img id="logo-light" class="app-logo" src="/logo.png"       alt="" aria-hidden="true">
+  </div>
   <a class="guide-link" href="/guide.html" target="_blank" rel="noopener">Guide d'utilisation →</a>
 </div>
 
@@ -154,6 +173,14 @@
     <input type="password" id="code-input" placeholder="Code admin" autocomplete="current-password">
     <button onclick="login()">Se connecter</button>
     <div class="toast" id="login-err"></div>
+  </div>
+
+  <h1 class="section-title">Graphiques</h1>
+  <div class="card">
+    <h2>Connexion</h2>
+    <input type="password" id="stats-code-input" placeholder="Code admin" autocomplete="current-password">
+    <button onclick="loginStats()">Se connecter</button>
+    <div class="toast" id="stats-login-err"></div>
   </div>
 </div>
 
@@ -366,6 +393,30 @@ async function login() {
   await loadAll();
 }
 
+// Connexion directe aux graphiques : code vérifié ici (erreur affichée sur place), puis
+// transmis à stats.html par sessionStorage, lu une fois et effacé — jamais dans l'URL (S1).
+async function loginStats() {
+  const code = document.getElementById('stats-code-input').value.trim();
+  if (!code) return;
+  const res = await fetchT(`/api/events?${qs({ code })}`).catch(() => null);
+  if (!res) { toast('stats-login-err', 'Serveur injoignable', 'err'); return; }
+  if (!res.ok) { toast('stats-login-err', 'Code incorrect', 'err'); return; }
+  try { sessionStorage.setItem('stats_code', code); } catch {}
+  location.href = '/stats.html';
+}
+
+// Flèche retour vers l'écran opérateur : seulement si on arrive par la roue de index.html
+// (?from=op). Mémorisé par onglet (sessionStorage) → survit à un aller-retour admin ↔ stats.
+// `/` suffit comme cible : index.html restaure le lien e/g depuis `op_last_link` (U19).
+(function initBackOp() {
+  let fromOp = new URLSearchParams(location.search).get('from') === 'op';
+  try {
+    if (fromOp) sessionStorage.setItem('from_op', '1');
+    else fromOp = sessionStorage.getItem('from_op') === '1';
+  } catch {}
+  if (fromOp) document.getElementById('back-op').classList.add('show');
+})();
+
 // U16: applique les restrictions visuelles selon le rôle
 function applyRoleUI() {
   const isAdmin = userRole === 'admin';
@@ -379,6 +430,9 @@ function applyRoleUI() {
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('code-input').addEventListener('keydown', e => {
     if (e.key === 'Enter') login();
+  });
+  document.getElementById('stats-code-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') loginStats();
   });
 });
 
