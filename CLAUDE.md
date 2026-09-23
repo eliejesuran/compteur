@@ -1,7 +1,7 @@
 # Compteur Événement
 
 ## Stack
-**Local**: Node.js 18 · Express · ws · qrcode · Chart.js (CDN) · Vanilla JS — no build.
+**Local**: Node.js 18 · Express · ws · qrcode (serveur, admin) · qrcode-generator (CDN, client index.html) · Chart.js (CDN) · Vanilla JS — no build.
 **Cloud**: CF Workers · Durable Objects (RegistryDO + EventDO) · Workers Assets · nodejs_compat
 
 ## Règles Claude
@@ -15,7 +15,7 @@ Français · tokens courts · vérifier le code 2× · mettre à jour ce fichier
 | `src/registry.js` | RegistryDO — index events, codes admin/perm |
 | `src/event.js` | EventDO — état event, WS hibernation, alarme historique |
 | `wrangler.jsonc` | Assets, DO bindings, migrations |
-| `public/index.html` | Opérateur : +1/−1/+5/−5, scan QR, bandeau (logo + dot + admin), fond ASCII Bruxelles |
+| `public/index.html` | Opérateur : +1/−1/+5/−5, scan QR + partage du QR de son propre groupe, bandeau (logo + dot + admin), fond ASCII Bruxelles |
 | `public/admin.html` | Admin : QR, groupes, archive, export XLSX, rôle PERM |
 | `public/stats.html` | Chart.js total + lignes groupes + stats opérateurs |
 | `public/guide.html` | Doc utilisateur statique (aucune dépendance externe) : guide opérateurs (rejoindre, +1/−1/+5/−5, hors-ligne) + guide organisateur (créer event/groupes, QR, capacité, PERM, fin de soirée) + mockups CSS de l'écran opérateur et du panneau admin |
@@ -98,9 +98,10 @@ Backoff reco 1s→…→30s, reset sur succès/switch. `wsReconnectNow()` sur `v
 - **Garde d'entrée du Worker (S4bis/L3bis)** : `badId()` rejette tout id non hexadécimal **avant** `idFromName()` (sinon n'importe quelle chaîne réveille un EventDO facturé), et `wrlCheck()` est un token bucket **par IP, tous events confondus** (600 burst / 40 par s) consulté avant de joindre le DO sur `/api/count`, `/api/state` et l'upgrade WS. Celui du DO est **par event** : faire varier `e` donnait un bucket neuf de 300 jetons à chaque id. **Limite assumée** : l'état est local à l'isolate (Cloudflare en fait tourner plusieurs) → mitigation, pas garantie ; la version dure passerait par le binding Rate Limiting de Cloudflare. `wrlCheck`/`badId` sont exportés pour les tests.
 - **Grâce déco (U4)** : `recentlyDisconnected`/`_recentlyDisc` — op visible 30s après déco, retrait via setTimeout, clé `${eventId}:${name}`.
 - **Cache QR (T1)** : `_qrCache={url,qr}` mémoire DO, invalidé si URL change. `generateQR` dans event.js ; index.js délègue via `/qr?g=X&url=X`.
+- **Scan/partage QR opérateur (index.html)** : `#scan-btn` ouvre `#scan-overlay` avec deux vues — **Scanner** (inchangé) et **Mon QR**, visible seulement si l'opérateur a déjà un groupe actif (`EVENT_ID && GROUP_ID`). Onglets (`#scan-tabs`) affichés seulement si les deux capacités existent (caméra ET groupe) ; sinon vue directe (comportement identique à avant si pas de groupe). Le QR de « Mon QR » est généré **côté client** (`qrcode(0,'M')` → `createSvgTag`, lib `qrcode-generator`), pas via `/api/qr` : cet endpoint exige le code admin, que l'opérateur n'a pas — mais le lien `?e&g` qu'il encode est déjà connu de l'opérateur (c'est son propre lien), donc aucun nouveau besoin d'auth. `renderMyQR()` cache le SVG par `EVENT_ID:GROUP_ID` (pas régénéré à chaque bascule d'onglet). `showScanTab()` coupe la caméra (`stopCamera()`) en passant sur Mon QR — pas de flux vidéo actif inutilement. Bouton **Partager le lien** : `navigator.share` si dispo, sinon `navigator.clipboard.writeText` + feedback texte temporaire.
 - **Persistance lien op (U19)** : localStorage `op_last_link={e,g}`. Écrit au boot si URL porte `e&g` ; relu si absents (PWA `start_url=/`) → `EVENT_ID/GROUP_ID` (`let`) restaurés + `history.replaceState`. Chaque op de la queue garde ses `e/g`. Lien mort → 4004 → saisie manuelle (U16).
 - **Hauteur viewport (U18)** : `--app-height = window.innerHeight` piloté JS (`setAppHeight`), CSS `height: var(--app-height, 100dvh)`. Recalc resize/orientationchange/pageshow/visualViewport + rAF + 300ms + visibilitychange. Lit `innerHeight` (pas `visualViewport.height`) → clavier Android ne réduit pas la mise en page.
-- **Bandeau op (U3/U21)** : `#statusbar` flex, hauteur 52px bornée par `#scan-btn` (32px). Logo `.app-logo` (height 22px) haut-gauche, switch clair/sombre via `@media prefers-color-scheme`. Lien admin `#admin-link` (engrenage, opacity 0.28) haut-droite, dans le bandeau (pas en fixed).
+- **Bandeau op (U3/U21)** : `#statusbar` flex, hauteur 52px bornée par `#scan-btn` (32px). Logo `.app-logo` (height 22px) haut-gauche, switch clair/sombre via `@media prefers-color-scheme`. `#scan-btn` + `#admin-link` groupés dans `#bandeau-icons` (`margin-left:auto`, `gap:8px`) plutôt que l'auto-margin posé sur un élément isolé — reste poussé à droite même si `#scan-btn` est masqué (pas de caméra ni de groupe actif). **Pas de `cap-label`** (compteur `count/capacity` en texte) : retiré du bandeau — redondant avec la barre de capacité sous le compteur, et le combo avec `#queue-badge` (« X en attente ») faisait passer le bandeau sur deux lignes sur petit écran.
 - **Logos pages** : `.logo-bar` en tête de `admin.html` + `stats.html` (`#logo-dark`/`#logo-light`, switch `@media prefers-color-scheme`, height 28px). Export XLSX : pas de logo (SheetJS gratuit ne supporte pas les images).
 - **Fond ASCII index.html** : background sur `html` seul, `body` sans background → `#bxl-bg {z-index:-1}` visible.
 
@@ -120,11 +121,12 @@ Faits : U1 (Wake Lock), U3 (lien admin → bandeau), U4 (grâce déco), U16 (sai
 
 **Sécurité**
 - **S1** Code admin en query param GET (logs, historique, Referer). → `Authorization: Bearer`, query en fallback.
-- **S2** ✅ SRI + `crossorigin="anonymous"` sur les 3 CDN : jsQR@1.4.0 (index), SheetJS@0.20.3 (admin), Chart.js **épinglé 4.4.1** (stats, avant `@4` flottant). Hash sha384 recalculé si bump de version — **toujours vérifier dans le navigateur après coup** : un hash faux ne casse rien visiblement, le script est juste bloqué en silence (scan QR mort, `window.jsQR` undefined, aucune erreur visible hors console). Contrôle :
+- **S2** ✅ SRI + `crossorigin="anonymous"` sur les 4 CDN : jsQR@1.4.0 + qrcode-generator@2.0.4 (index), SheetJS@0.20.3 (admin), Chart.js **épinglé 4.4.1** (stats, avant `@4` flottant). Hash sha384 recalculé si bump de version — **toujours vérifier dans le navigateur après coup** : un hash faux ne casse rien visiblement, le script est juste bloqué en silence (scan QR mort, `window.jsQR` undefined, aucune erreur visible hors console). Contrôle :
   ```bash
   curl -sL <url> | openssl dgst -sha384 -binary | openssl base64 -A   # doit égaler l'attribut integrity
   ```
   ⚠️ **Le hash jsQR a été cassé deux fois** : le commit 9680013 « Fix SRI » a remplacé le hash **correct** par un faux (recalcul fait sur autre chose que le fichier servi). Vérité terrain au 2026-08-25 : jsQR@1.4.0 = `sha384-hStSInNIZ8ljtOVrmrgf7zdHMapaLBWoSnPTtF0nzsybp4+LuhDz6sHuEVpWIX8o`. Ne jamais modifier un `integrity` sans (1) le curl ci-dessus **et** (2) un contrôle navigateur que le symbole global existe.
+  ⚠️ **jsdelivr auto-bundle certains packages npm « à la volée »** (bannière `Do NOT use SRI with dynamically generated files!` dans la réponse) — repéré en ajoutant qrcode-generator : `/npm/qrcode@1.5.3/lib/browser.min.js` est synthétisé par jsdelivr (pas un fichier du repo), donc son contenu — et son hash — peut changer sans bump de version. D'où le choix de `qrcode-generator` plutôt que `qrcode` côté client : `dist/qrcode.js` est un fichier statique réellement publié dans le package (`var qrcode = ...` en portée globale, comme jsQR/Chart.js/SheetJS), donc sûr à épingler. Vérité terrain au 2026-09-23 : qrcode-generator@2.0.4 `dist/qrcode.js` = `sha384-e9EFD6BGC90bkW9aDV5xbbBfzwN7G8YImHao2lfLVKV/hPB0E0go+H3I64h7oHtA`. **Avant d'ajouter un nouveau CDN, vérifier que l'URL sert un fichier statique du package (pas un chemin `.min.js` reconstruit par le CDN).**
 - **S4/S7** Event ID 6 hex (~16M) brute-forçable ; `/api/state`+`/api/history` non auth pour IDs connus. → 8-10 hex à la création ; option rate-limit `/api/state`.
 - **S5** Pas de check `Origin` sur upgrade WS (CSWSH) : site tiers peut lire totaux+prénoms si event ID connu. → refuser si `Origin` présent ≠ host (server.js + index.js).
 - **S6** `/api/qr` local construit l'URL depuis `Host` non validé. → whitelist IPs locales + localhost (faible, admin auth).

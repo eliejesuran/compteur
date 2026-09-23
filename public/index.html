@@ -13,6 +13,9 @@
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"
           integrity="sha384-hStSInNIZ8ljtOVrmrgf7zdHMapaLBWoSnPTtF0nzsybp4+LuhDz6sHuEVpWIX8o"
           crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@2.0.4/dist/qrcode.js"
+          integrity="sha384-e9EFD6BGC90bkW9aDV5xbbBfzwN7G8YImHao2lfLVKV/hPB0E0go+H3I64h7oHtA"
+          crossorigin="anonymous"></script>
   <style>
     :root {
       --bg: #111827;
@@ -112,8 +115,6 @@
       border-radius: 999px;
     }
 
-    #cap-label { margin-left: auto; font-size: 13px; opacity: 0.7; }
-
     #op-name-btn {
       display: none;
       padding: 3px 10px;
@@ -129,6 +130,15 @@
     }
     #op-name-btn:active { background: rgba(59,130,246,0.25); }
 
+    /* Icônes du bandeau (scan + admin) — groupées, poussées à droite */
+    #bandeau-icons {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
     #scan-btn {
       display: none;
       width: 32px; height: 32px;
@@ -137,7 +147,6 @@
       color: var(--muted);
       flex-shrink: 0;
       touch-action: manipulation;
-      margin-left: 8px;
     }
     #scan-btn svg { display: block; }
     #scan-btn:active { color: var(--blue); }
@@ -181,7 +190,66 @@
       background: rgba(255,255,255,0.15);
       color: #fff; font-size: 20px;
       cursor: pointer; touch-action: manipulation;
+      z-index: 310;
     }
+
+    /* Bascule Scanner / Mon QR — visible seulement si un groupe est déjà actif */
+    #scan-tabs {
+      display: none;
+      position: absolute;
+      top: max(16px, env(safe-area-inset-top) + 8px);
+      left: 50%;
+      transform: translateX(-50%);
+      gap: 2px;
+      background: rgba(255,255,255,0.12);
+      border-radius: 999px;
+      padding: 3px;
+      z-index: 305;
+    }
+    .scan-tab-btn {
+      border: none; background: none;
+      color: rgba(255,255,255,0.65);
+      font-size: 13px; font-weight: 700;
+      padding: 7px 16px;
+      border-radius: 999px;
+      cursor: pointer; touch-action: manipulation;
+    }
+    .scan-tab-btn.active { background: #fff; color: #111827; }
+
+    /* Mon QR — l'opérateur montre son propre lien pour qu'un autre téléphone le scanne */
+    #my-qr-view {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      padding: 24px;
+      max-width: 320px;
+      text-align: center;
+    }
+    #my-qr-name { font-size: 17px; font-weight: 800; color: #fff; }
+    #my-qr-svg {
+      background: #fff;
+      border-radius: 16px;
+      padding: 14px;
+      width: 220px; height: 220px;
+    }
+    #my-qr-svg svg { width: 100%; height: 100%; display: block; }
+    #my-qr-hint {
+      font-size: 13px;
+      color: rgba(255,255,255,0.65);
+      line-height: 1.5;
+      margin: 0;
+    }
+    #my-qr-share-btn {
+      margin-top: 6px;
+      padding: 12px 22px;
+      border: none; border-radius: 999px;
+      background: var(--blue);
+      color: #fff;
+      font-size: 15px; font-weight: 800;
+      cursor: pointer; touch-action: manipulation;
+    }
+    #my-qr-share-btn:active { filter: brightness(0.85); }
 
     /* ── Count area ── */
     #count-area {
@@ -478,29 +546,40 @@
   <span id="status-text">Connexion…</span>
   <button id="op-name-btn" onclick="editName()"></button>
   <span id="queue-badge"></span>
-  <span id="cap-label">– / –</span>
-  <button id="scan-btn" onclick="openScanner()" title="Scanner un QR code" aria-label="Scanner un QR code">
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/>
-      <path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/>
-      <rect x="7" y="7" width="3" height="3"/><rect x="14" y="7" width="3" height="3"/>
-      <rect x="7" y="14" width="3" height="3"/><rect x="14" y="14" width="3" height="3"/>
-    </svg>
-  </button>
-  <a id="admin-link" href="/admin.html" title="Administration" aria-label="Administration">
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <circle cx="12" cy="12" r="3"/>
-      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-    </svg>
-  </a>
+  <div id="bandeau-icons">
+    <button id="scan-btn" onclick="openScanner()" title="Scanner / partager un QR code" aria-label="Scanner / partager un QR code">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/>
+        <path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/>
+        <rect x="7" y="7" width="3" height="3"/><rect x="14" y="7" width="3" height="3"/>
+        <rect x="7" y="14" width="3" height="3"/><rect x="14" y="14" width="3" height="3"/>
+      </svg>
+    </button>
+    <a id="admin-link" href="/admin.html" title="Administration" aria-label="Administration">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+    </a>
+  </div>
 </div>
 
 <!-- Scanner overlay -->
 <div id="scan-overlay">
+  <div id="scan-tabs">
+    <button type="button" class="scan-tab-btn" data-tab="scan" onclick="showScanTab('scan')">Scanner</button>
+    <button type="button" class="scan-tab-btn" data-tab="qr" onclick="showScanTab('qr')">Mon QR</button>
+  </div>
   <video id="scan-video" autoplay muted playsinline></video>
   <canvas id="scan-canvas" style="display:none"></canvas>
   <div id="scan-reticle"></div>
   <div id="scan-hint">Pointez la caméra vers le QR code</div>
+  <div id="my-qr-view">
+    <div id="my-qr-name"></div>
+    <div id="my-qr-svg"></div>
+    <p id="my-qr-hint">Faites scanner cet écran par un autre téléphone pour rejoindre cette entrée.</p>
+    <button id="my-qr-share-btn" type="button" onclick="shareMyQR()">Partager le lien</button>
+  </div>
   <button id="scan-close" onclick="closeScanner()">✕</button>
 </div>
 
@@ -657,7 +736,6 @@ function setCount(n, cap) {
 
   const pct = capacity > 0 ? count / capacity : 0;
   document.getElementById('bar').style.width = Math.min(100, pct * 100) + '%';
-  document.getElementById('cap-label').textContent = `${count} / ${capacity}`;
 
   const body = document.body;
   body.classList.remove('state-warn', 'state-danger');
@@ -957,27 +1035,91 @@ bindTapBtn(document.getElementById('btn-m5'), -5);
 let scanStream = null;
 let scanRaf = null;
 
+// Le bouton sert à scanner (caméra) ET à montrer son propre QR (si déjà dans un groupe) —
+// visible dès que l'une des deux capacités existe.
 function initScanBtn() {
-  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+  const hasCamera = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+  if (hasCamera || (EVENT_ID && GROUP_ID)) {
     document.getElementById('scan-btn').style.display = 'block';
   }
 }
 
-async function openScanner() {
-  const overlay = document.getElementById('scan-overlay');
-  const video   = document.getElementById('scan-video');
-  overlay.classList.add('open');
+function openScanner() {
+  document.getElementById('scan-overlay').classList.add('open');
+  const hasGroup  = !!(EVENT_ID && GROUP_ID);
+  const hasCamera = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+  // Les deux onglets ne s'affichent que s'il y a un vrai choix à faire entre les deux.
+  document.getElementById('scan-tabs').style.display = (hasGroup && hasCamera) ? 'flex' : 'none';
+  showScanTab(hasCamera ? 'scan' : 'qr');
+}
+
+function showScanTab(tab) {
+  const isScan = tab === 'scan';
+  document.getElementById('scan-video').style.display   = isScan ? 'block' : 'none';
+  document.getElementById('scan-reticle').style.display = isScan ? 'block' : 'none';
+  document.getElementById('scan-hint').style.display    = isScan ? 'block' : 'none';
+  document.getElementById('my-qr-view').style.display   = isScan ? 'none' : 'flex';
+  document.querySelectorAll('.scan-tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  if (isScan) {
+    startCamera();
+  } else {
+    stopCamera();
+    renderMyQR();
+  }
+}
+
+async function startCamera() {
+  document.getElementById('scan-hint').textContent = 'Pointez la caméra vers le QR code';
   try {
     scanStream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: { ideal: 'environment' } },
       audio: false,
     });
+    const video = document.getElementById('scan-video');
     video.srcObject = scanStream;
     video.play();
     video.addEventListener('loadedmetadata', startScanLoop, { once: true });
   } catch {
     document.getElementById('scan-hint').textContent = 'Caméra non accessible';
   }
+}
+
+function stopCamera() {
+  cancelAnimationFrame(scanRaf);
+  scanRaf = null;
+  if (scanStream) {
+    scanStream.getTracks().forEach(t => t.stop());
+    scanStream = null;
+  }
+  document.getElementById('scan-video').srcObject = null;
+}
+
+// ── Mon QR — pour qu'un autre téléphone rejoigne la même entrée sans repasser par l'admin
+function renderMyQR() {
+  document.getElementById('my-qr-name').textContent = groupName || 'Cette entrée';
+  const box = document.getElementById('my-qr-svg');
+  const key = `${EVENT_ID}:${GROUP_ID}`;
+  if (box.dataset.key === key) return; // déjà généré pour ce groupe
+  const qr = qrcode(0, 'M');
+  qr.addData(`${location.origin}/?e=${encodeURIComponent(EVENT_ID)}&g=${encodeURIComponent(GROUP_ID)}`);
+  qr.make();
+  box.innerHTML = qr.createSvgTag(4, 2);
+  box.dataset.key = key;
+}
+
+async function shareMyQR() {
+  const url = `${location.origin}/?e=${encodeURIComponent(EVENT_ID)}&g=${encodeURIComponent(GROUP_ID)}`;
+  if (navigator.share) {
+    try { await navigator.share({ url, title: groupName ? `Rejoindre ${groupName}` : 'Rejoindre cet événement' }); } catch {}
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(url);
+    const btn = document.getElementById('my-qr-share-btn');
+    const prev = btn.textContent;
+    btn.textContent = 'Lien copié';
+    setTimeout(() => { btn.textContent = prev; }, 1500);
+  } catch {}
 }
 
 function startScanLoop() {
@@ -1008,14 +1150,7 @@ function startScanLoop() {
 
 function closeScanner() {
   document.getElementById('scan-overlay').classList.remove('open');
-  cancelAnimationFrame(scanRaf);
-  scanRaf = null;
-  if (scanStream) {
-    scanStream.getTracks().forEach(t => t.stop());
-    scanStream = null;
-  }
-  document.getElementById('scan-video').srcObject = null;
-  document.getElementById('scan-hint').textContent = 'Pointez la caméra vers le QR code';
+  stopCamera();
 }
 
 // Extrait {e,g} d'un lien collé ou scanné. Accepte une URL complète,

@@ -129,7 +129,9 @@
       #bxl-bg pre { color: rgba(80, 60, 10, 0.06); }
     }
     /* Logo */
-    .logo-bar { margin-bottom: 14px; }
+    .logo-bar { margin-bottom: 14px; display: flex; align-items: center; justify-content: space-between; }
+    .guide-link { font-size: 12px; color: var(--muted); text-decoration: none; }
+    .guide-link:hover { color: var(--accent); }
     .app-logo { height: 28px; width: auto; display: block; }
     #logo-light { display: none; }
     @media (prefers-color-scheme: light) { #logo-dark { display: none; } #logo-light { display: block; } }
@@ -141,6 +143,7 @@
 <div class="logo-bar">
   <img id="logo-dark"  class="app-logo" src="/logo_white.png" alt="" aria-hidden="true">
   <img id="logo-light" class="app-logo" src="/logo.png"       alt="" aria-hidden="true">
+  <a class="guide-link" href="/guide.html" target="_blank" rel="noopener">Guide d'utilisation →</a>
 </div>
 
 <!-- ── Login ── -->
