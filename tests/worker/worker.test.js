@@ -613,6 +613,71 @@ describe('Contrat cloud : 24 h de détail à 30 s', () => {
   }, 30000);
 });
 
+// ── Noms : événement et groupe ne doivent JAMAIS se confondre ────────────────
+// Un renommage de groupe envoie {e, g, name}. Le DO route bien vers le groupe, mais le
+// Worker synchronisait le registre dès que `name` était présent, SANS tester `g` →
+// le registre prenait le nom du groupe pour celui de l'événement, et la liste admin
+// (qui lit le registre) affichait l'événement sous le nom du groupe.
+
+describe('Noms événement / groupe', () => {
+  it('renommer un GROUPE ne touche pas au nom de l\'ÉVÉNEMENT', async () => {
+    const evt = await createEvent('Soirée VHS');
+    const g = evt.groups[0].id;
+
+    await SELF.fetch(`${BASE}/api/admin/config`, J({ code: ADMIN, e: evt.id, g, name: 'Entrée Nord' }));
+
+    const st = await (await SELF.fetch(`${BASE}/api/state?e=${evt.id}&g=${g}`)).json();
+    expect(st.groupName).toBe('Entrée Nord');
+    expect(st.eventName).toBe('Soirée VHS');
+
+    // la liste admin lit le registre : c'est là que la confusion se voyait
+    const { events } = await (await SELF.fetch(`${BASE}/api/events?code=${ADMIN}`)).json();
+    expect(events.find(x => x.id === evt.id).name).toBe('Soirée VHS');
+
+    await SELF.fetch(`${BASE}/api/admin/config`, J({ code: ADMIN, e: evt.id, deleteEvent: true }));
+  });
+
+  it('renommer l\'ÉVÉNEMENT ne touche pas au nom du GROUPE', async () => {
+    const evt = await createEvent('Avant');
+    const g = evt.groups[0].id;
+
+    await SELF.fetch(`${BASE}/api/admin/config`, J({ code: ADMIN, e: evt.id, name: 'Après' }));
+
+    const st = await (await SELF.fetch(`${BASE}/api/state?e=${evt.id}&g=${g}`)).json();
+    expect(st.eventName).toBe('Après');
+    expect(st.groupName).toBe('Principal');
+
+    const { events } = await (await SELF.fetch(`${BASE}/api/events?code=${ADMIN}`)).json();
+    expect(events.find(x => x.id === evt.id).name).toBe('Après');
+
+    await SELF.fetch(`${BASE}/api/admin/config`, J({ code: ADMIN, e: evt.id, deleteEvent: true }));
+  });
+
+  it('un registre déjà corrompu est réparé au premier listing (DO = source de vérité)', async () => {
+    const evt = await createEvent('Vrai Nom');
+
+    // on corrompt le registre à la main, comme l'ancien bug le faisait
+    const reg = env.REGISTRY.get(env.REGISTRY.idFromName('registry'));
+    await runInDurableObject(reg, (inst) => inst.fetch(new Request('http://do/events/update', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: evt.id, name: 'Nom De Groupe Parasite' }),
+    })));
+
+    // premier listing : le nom affiché doit être celui du DO…
+    const l1 = await (await SELF.fetch(`${BASE}/api/events?code=${ADMIN}`)).json();
+    expect(l1.events.find(x => x.id === evt.id).name).toBe('Vrai Nom');
+
+    // …et le registre doit avoir été recalé au passage
+    const brut = await runInDurableObject(reg, async (inst) => {
+      const r = await inst.fetch(new Request('http://do/events'));
+      return (await r.json()).events.find(x => x.id === evt.id).name;
+    });
+    expect(brut).toBe('Vrai Nom');
+
+    await SELF.fetch(`${BASE}/api/admin/config`, J({ code: ADMIN, e: evt.id, deleteEvent: true }));
+  });
+});
+
 // ⚠️ Doit rester le DERNIER bloc : il remplit le registre jusqu'au plafond.
 describe('Plafond événements (R4/L1) — 50 au total', () => {
   async function totalEvents() {

@@ -87,7 +87,7 @@ async function resolveRole(env, code) {
 // ── Worker entry point ────────────────────────────────────────────────────────
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url  = new URL(request.url);
     const path = url.pathname;
 
@@ -102,7 +102,7 @@ export default {
       return eventStub(env, e).fetch(request);
     }
 
-    if (path.startsWith('/api/')) return handleAPI(request, env, url, path);
+    if (path.startsWith('/api/')) return handleAPI(request, env, url, path, ctx);
 
     // Fichiers statiques (public/)
     return env.ASSETS.fetch(request);
@@ -111,7 +111,7 @@ export default {
 
 // ── API router ────────────────────────────────────────────────────────────────
 
-async function handleAPI(request, env, url, path) {
+async function handleAPI(request, env, url, path, ctx) {
   const method = request.method;
   let body = null;
   if (method !== 'GET') {
@@ -168,8 +168,15 @@ async function handleAPI(request, env, url, path) {
       try {
         // N10 : timeout par DO → un DO lent ne bloque pas toute la liste admin.
         const r   = await eventStub(env, m.id).fetch(iReq('/summary'), { signal: AbortSignal.timeout(3000) });
-        const { total, groups } = await r.json();
-        return { ...m, total, groups };
+        const { total, groups, name } = await r.json();
+        // Le DO est la SOURCE DE VÉRITÉ du nom ; le registre n'est qu'un index. S'ils
+        // divergent (entrées corrompues par l'ancien bug de renommage de groupe), on
+        // affiche le bon nom et on recale le registre au passage, une seule fois.
+        if (name && name !== m.name) {
+          const recale = registryStub(env).fetch(iReq('/events/update', 'POST', { id: m.id, name }));
+          if (ctx?.waitUntil) ctx.waitUntil(recale); else await recale;
+        }
+        return { ...m, total, groups, name: name ?? m.name };
       } catch {
         return { ...m, total: 0, groups: [] };
       }
@@ -258,9 +265,12 @@ async function handleAPI(request, env, url, path) {
       const configResp = await eventStub(env, e).fetch(
         iReq('/config', 'POST', { g, capacity, reset, name, archived, deleteGroup })
       );
-      // Sync metadata vers le registre — SEULEMENT si le DO a accepté. Sinon registre et
-      // DO divergent : l'event est listé comme actif mais répond 404 partout (zombie).
-      if (configResp.ok && (name !== undefined || capacity !== undefined || archived !== undefined)) {
+      // Sync metadata vers le registre — SEULEMENT si le DO a accepté (sinon registre et
+      // DO divergent : event listé actif mais 404 partout) ET SEULEMENT au niveau ÉVÉNEMENT.
+      // `!g` est essentiel : un renommage de GROUPE envoie {e, g, name}. Le DO route bien
+      // vers le groupe, mais sans ce garde le registre prenait ce `name` pour celui de
+      // l'ÉVÉNEMENT → renommer un groupe renommait l'événement dans la liste admin.
+      if (configResp.ok && !g && (name !== undefined || capacity !== undefined || archived !== undefined)) {
         await registryStub(env).fetch(
           iReq('/events/update', 'POST', { id: e, name, capacity, archived })
         );

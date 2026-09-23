@@ -414,9 +414,10 @@ export class EventDO extends DurableObject {
       });
     }
 
-    // GET /summary — pour la liste admin (total + groups)
+    // GET /summary — pour la liste admin (total + groups + nom).
+    // `name` sert de source de vérité au Worker pour recaler le registre.
     if (path === '/summary' && request.method === 'GET') {
-      return Response.json({ total: this._total(), groups: this._groupSummary() });
+      return Response.json({ total: this._total(), groups: this._groupSummary(), name: this._s.name });
     }
 
     // POST /groups

@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="/icon.svg">
+  <meta name="theme-color" content="#0f172a" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f8fafc" media="(prefers-color-scheme: light)">
+  <title>Guide – Compteur</title>
+  <style>
+    :root {
+      --bg: #0f172a; --surface: #1e293b; --border: #334155;
+      --text: #f8fafc; --muted: #94a3b8; --accent: #3b82f6;
+      --ok: #22c55e; --warn: #f59e0b; --danger: #ef4444;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f8fafc; --surface: #ffffff; --border: #e2e8f0;
+        --text: #0f172a; --muted: #64748b; --accent: #2563eb;
+        --ok: #16a34a; --warn: #d97706; --danger: #dc2626;
+      }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--bg); color: var(--text);
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 720px; margin: 0 auto; padding: 20px 20px 60px;
+      line-height: 1.6;
+    }
+    a { color: var(--accent); }
+    .logo-bar { margin-bottom: 14px; }
+    .app-logo { height: 28px; width: auto; display: block; }
+    #logo-light { display: none; }
+    @media (prefers-color-scheme: light) { #logo-dark { display: none; } #logo-light { display: block; } }
+
+    h1 { font-size: 26px; font-weight: 800; margin-bottom: 6px; }
+    .lead { color: var(--muted); font-size: 15px; margin-bottom: 20px; }
+
+    h2 {
+      font-size: 21px; font-weight: 800; margin: 44px 0 12px;
+      scroll-margin-top: 62px;
+    }
+    h2:first-of-type { margin-top: 28px; }
+    h3 { font-size: 16px; font-weight: 700; margin: 22px 0 8px; scroll-margin-top: 62px; }
+    p { font-size: 15px; margin-bottom: 10px; }
+    ul, ol.plain { padding-left: 20px; margin-bottom: 10px; }
+    li { font-size: 15px; margin-bottom: 4px; }
+    strong { font-weight: 700; }
+
+    /* ── Sticky nav chips ── */
+    nav.toc {
+      position: sticky; top: 0; z-index: 10;
+      display: flex; gap: 8px; overflow-x: auto;
+      padding: 10px 0; margin-bottom: 8px;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+    }
+    nav.toc a {
+      flex-shrink: 0; text-decoration: none;
+      color: var(--text); background: var(--surface);
+      border: 1px solid var(--border); border-radius: 999px;
+      padding: 6px 14px; font-size: 13px; font-weight: 600;
+    }
+    nav.toc a:active { filter: brightness(0.9); }
+
+    /* ── Callouts ── */
+    .callout {
+      border-left: 4px solid var(--accent);
+      background: color-mix(in srgb, var(--accent) 10%, transparent);
+      border-radius: 8px; padding: 12px 16px; margin: 14px 0;
+      font-size: 14px;
+    }
+    .callout.warn { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+    .callout.ok   { border-color: var(--ok);   background: color-mix(in srgb, var(--ok) 10%, transparent); }
+    .callout.danger { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+    .callout p:last-child { margin-bottom: 0; }
+
+    /* ── Numbered steps ── */
+    ol.steps { list-style: none; margin: 16px 0; counter-reset: step; }
+    ol.steps > li {
+      position: relative; padding-left: 44px; margin-bottom: 16px;
+      counter-increment: step;
+    }
+    ol.steps > li::before {
+      content: counter(step);
+      position: absolute; left: 0; top: 0;
+      width: 28px; height: 28px; border-radius: 50%;
+      background: var(--accent); color: #fff;
+      font-weight: 800; font-size: 13px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    ol.steps > li strong { display: block; margin-bottom: 2px; }
+
+    /* ── Badge (matches mock annotations) ── */
+    .badge-num {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 16px; height: 16px; border-radius: 50%;
+      background: var(--accent); color: #fff;
+      font-size: 10px; font-weight: 800; flex-shrink: 0;
+    }
+
+    /* ── UI copy quoting ── */
+    .ui {
+      display: inline-block; padding: 1px 7px; border-radius: 6px;
+      background: var(--surface); border: 1px solid var(--border);
+      font-size: 13px; font-weight: 600;
+    }
+
+    /* ── Entrance → total diagram ── */
+    .diagram { margin: 20px 0; }
+    .d-entries {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+    }
+    @media (max-width: 560px) { .d-entries { grid-template-columns: 1fr 1fr; } }
+    .d-entry {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 10px; text-align: center;
+    }
+    .d-entry-name { font-size: 12px; font-weight: 700; margin-bottom: 6px; }
+    .d-entry-phones { display: flex; justify-content: center; gap: 4px; margin-bottom: 4px; }
+    .phone-glyph { width: 8px; height: 14px; border: 1.5px solid var(--muted); border-radius: 2px; }
+    .d-entry-count { font-size: 11px; color: var(--muted); }
+    .d-arrow { text-align: center; color: var(--muted); font-size: 13px; margin: 10px 0; }
+    .d-total {
+      background: var(--surface); border: 2px solid var(--accent);
+      border-radius: 14px; padding: 14px; text-align: center;
+    }
+    .d-total-label { font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+    .d-total-num { font-size: 40px; font-weight: 900; color: var(--accent); font-variant-numeric: tabular-nums; }
+
+    /* ── Phone mockup ── */
+    .phone-mock {
+      width: 280px; max-width: 100%; margin: 22px auto; border-radius: 26px;
+      overflow: hidden; background: #111827; color: #f9fafb;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.3); border: 1px solid var(--border);
+    }
+    .pm-bar { display: flex; align-items: center; gap: 6px; padding: 10px 12px; background: #1f2937; }
+    .pm-dot { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 6px #22c55e; flex-shrink: 0; }
+    .pm-status { font-size: 11px; }
+    .pm-bar .badge-num { margin-left: 4px; }
+    .pm-cap { margin-left: auto; font-size: 11px; opacity: 0.7; }
+    .pm-count-wrap { text-align: center; padding: 24px 10px 16px; }
+    .pm-count { font-size: 54px; font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; }
+    .pm-count-label { font-size: 12px; color: #9ca3af; margin-top: 3px; }
+    .pm-sub { font-size: 12px; color: #9ca3af; margin-top: 6px; }
+    .pm-bar-track { width: 60%; height: 5px; background: #374151; border-radius: 3px; margin: 12px auto 0; overflow: hidden; }
+    .pm-bar-fill { width: 43%; height: 100%; background: #22c55e; }
+    .pm-main-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 0 10px 6px; }
+    .pm-btn { height: 54px; border-radius: 14px; display: flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 900; color: #fff; }
+    .pm-plus { background: #1d4ed8; } .pm-minus { background: #991b1b; }
+    .pm-small-btns { display: flex; gap: 6px; padding: 0 10px 14px; }
+    .pm-sbtn { flex: 1; height: 34px; border: 1.5px solid #374151; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; color: #9ca3af; }
+    .mock-caption { text-align: center; font-size: 12px; color: var(--muted); margin-top: -12px; margin-bottom: 16px; }
+
+    /* ── Admin mock ── */
+    .admin-mock {
+      max-width: 320px; margin: 20px auto; border: 1px solid var(--border);
+      border-radius: 14px; background: var(--surface); padding: 16px;
+    }
+    .admin-mock h4 { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px; }
+    .am-count { font-size: 42px; font-weight: 900; text-align: center; color: var(--accent); line-height: 1; font-variant-numeric: tabular-nums; }
+    .am-sub { text-align: center; font-size: 12px; color: var(--muted); margin: 3px 0 12px; }
+    .am-table { width: 100%; font-size: 13px; border-collapse: collapse; }
+    .am-table td { padding: 6px 2px; }
+    .am-table tr + tr td { border-top: 1px solid var(--border); }
+    .am-table tfoot td { border-top: 2px solid var(--border); font-weight: 800; padding-top: 8px; }
+    .am-table tfoot .am-total-num { color: var(--accent); }
+    .am-table td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+
+    /* ── Legend ── */
+    ul.legend { list-style: none; padding: 0; margin: 8px 0 18px; }
+    ul.legend li { display: flex; gap: 8px; align-items: flex-start; font-size: 13.5px; margin-bottom: 7px; color: var(--muted); }
+    ul.legend li strong { color: var(--text); }
+
+    /* ── FAQ ── */
+    .faq-item { border-bottom: 1px solid var(--border); padding: 14px 0; }
+    .faq-item:last-child { border-bottom: none; }
+    .faq-q { font-weight: 700; font-size: 15px; margin-bottom: 4px; }
+    .faq-a { color: var(--muted); font-size: 14px; }
+
+    footer { margin-top: 50px; padding-top: 16px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+
+    @media print {
+      nav.toc { position: static; }
+      .phone-mock, .pm-btn, .pm-sbtn { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      a { color: inherit; text-decoration: none; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="logo-bar">
+  <img id="logo-dark"  class="app-logo" src="/logo_white.png" alt="" aria-hidden="true">
+  <img id="logo-light" class="app-logo" src="/logo.png"       alt="" aria-hidden="true">
+</div>
+
+<h1>Guide d'utilisation</h1>
+<p class="lead">Compteur d'événement en temps réel — comment compter juste, à plusieurs téléphones, sur plusieurs entrées.</p>
+
+<nav class="toc">
+  <a href="#apercu">Aperçu</a>
+  <a href="#operateurs">Opérateurs</a>
+  <a href="#organisateur">Organisateur</a>
+  <a href="#chiffre-exact">Le chiffre exact</a>
+  <a href="#faq">Questions fréquentes</a>
+</nav>
+
+<!-- ═══════════════════════ APERÇU ═══════════════════════ -->
+<h2 id="apercu">Le principe</h2>
+<p>Chaque entrée de l'événement est un <strong>groupe</strong> dans l'outil. Un ou plusieurs téléphones sont affectés à ce groupe et comptent les passages avec deux boutons : <span class="ui">+1</span> et <span class="ui">−1</span>. Tous les groupes s'additionnent en direct pour donner le total de l'événement — visible à la seconde près par l'organisateur, sur n'importe quel téléphone opérateur, et sur la page statistiques.</p>
+
+<div class="diagram">
+  <div class="d-entries">
+    <div class="d-entry">
+      <div class="d-entry-name">Entrée Nord</div>
+      <div class="d-entry-phones"><span class="phone-glyph"></span><span class="phone-glyph"></span><span class="phone-glyph"></span></div>
+      <div class="d-entry-count">3 téléphones</div>
+    </div>
+    <div class="d-entry">
+      <div class="d-entry-name">Entrée Sud</div>
+      <div class="d-entry-phones"><span class="phone-glyph"></span><span class="phone-glyph"></span><span class="phone-glyph"></span></div>
+      <div class="d-entry-count">3 téléphones</div>
+    </div>
+    <div class="d-entry">
+      <div class="d-entry-name">Entrée Est</div>
+      <div class="d-entry-phones"><span class="phone-glyph"></span><span class="phone-glyph"></span><span class="phone-glyph"></span></div>
+      <div class="d-entry-count">3 téléphones</div>
+    </div>
+    <div class="d-entry">
+      <div class="d-entry-name">Entrée Ouest</div>
+      <div class="d-entry-phones"><span class="phone-glyph"></span><span class="phone-glyph"></span><span class="phone-glyph"></span></div>
+      <div class="d-entry-count">3 téléphones</div>
+    </div>
+  </div>
+  <div class="d-arrow">↓ s'additionnent en direct ↓</div>
+  <div class="d-total">
+    <div class="d-total-label">Total événement</div>
+    <div class="d-total-num">128</div>
+  </div>
+</div>
+<p style="text-align:center;font-size:12px;color:var(--muted);margin-top:-8px">Exemple avec 4 entrées et 12 téléphones (3 par entrée) — la répartition est libre, rien n'oblige à faire exactement 3/3/3/3.</p>
+
+<ul>
+  <li>Fonctionne même sans réseau à l'entrée — le téléphone rattrape tout seul dès qu'il retrouve du signal.</li>
+  <li>Plusieurs téléphones peuvent compter en même temps sur la même entrée sans se marcher dessus.</li>
+  <li>Rien ne se perd si un téléphone redémarre ou si l'appli est fermée par erreur.</li>
+</ul>
+
+<!-- ═══════════════════════ OPÉRATEURS ═══════════════════════ -->
+<h2 id="operateurs">Vous tenez un téléphone à l'entrée</h2>
+<p>On vous a confié un QR code — un par entrée. Voici comment vous en servir.</p>
+
+<ol class="steps">
+  <li><strong>Scannez le QR code de VOTRE entrée</strong> (ou ouvrez le lien envoyé par l'organisateur, bouton <span class="ui">Saisir le lien manuellement</span> si besoin). Chaque entrée a son propre QR code — vérifiez que c'est le bon avant de commencer à compter.</li>
+  <li><strong>Indiquez votre prénom</strong> à la première connexion. Il n'est visible que par l'organisateur, pour savoir qui est en ligne.</li>
+  <li><strong>C'est prêt.</strong> Le grand chiffre affiche le total de l'événement, mis à jour en direct. Juste en dessous, « dont X en [nom de votre entrée] » indique ce que vous et vos collègues sur cette même entrée avez compté.</li>
+</ol>
+
+<div class="phone-mock">
+  <div class="pm-bar">
+    <span class="pm-dot"></span>
+    <span class="pm-status">En ligne</span>
+    <span class="badge-num">1</span>
+    <span class="pm-cap">128 / 300 <span class="badge-num">4</span></span>
+  </div>
+  <div class="pm-count-wrap">
+    <div class="pm-count">128</div>
+    <span class="badge-num">2</span>
+    <div class="pm-count-label">personnes</div>
+    <div class="pm-sub">dont 34 en Entrée Nord <span class="badge-num">3</span></div>
+    <div class="pm-bar-track"><div class="pm-bar-fill"></div></div>
+  </div>
+  <div class="pm-main-btns">
+    <div class="pm-btn pm-plus">+1</div>
+    <div class="pm-btn pm-minus">−1</div>
+  </div>
+  <div class="pm-small-btns">
+    <div class="pm-sbtn">+5</div>
+    <div class="pm-sbtn">−5</div>
+  </div>
+</div>
+<p class="mock-caption">Écran type d'un téléphone opérateur <span class="badge-num">5</span> / <span class="badge-num">6</span> ci-dessous</p>
+
+<ul class="legend">
+  <li><span class="badge-num">1</span> Point vert = connecté au serveur. Rouge = hors ligne, mais vos appuis restent comptés et partiront dès que le réseau revient.</li>
+  <li><span class="badge-num">2</span> Le grand chiffre : le total <strong>exact</strong> de tout l'événement, toutes entrées confondues, en direct.</li>
+  <li><span class="badge-num">3</span> « dont X en [entrée] » : le sous-total compté sur votre entrée précisément.</li>
+  <li><span class="badge-num">4</span> Capacité : le total actuel sur le seuil d'alerte réglé par l'organisateur. La barre passe orange puis rouge en approchant.</li>
+  <li><span class="badge-num">5</span> <span class="ui">+1</span> une personne entre. <span class="ui">−1</span> une personne ressort par votre entrée, ou pour corriger tout de suite un clic en trop.</li>
+  <li><span class="badge-num">6</span> <span class="ui">+5</span> / <span class="ui">−5</span> : un groupe de personnes qui entre ou sort d'un coup — évite de cliquer cinq fois.</li>
+</ul>
+
+<div class="callout warn">
+  <p><strong>Un clic en trop ?</strong> Appuyez sur −1 immédiatement. Le chiffre se corrige en temps réel, pour vous et pour tous les autres écrans.</p>
+</div>
+
+<h3>Pas de réseau à l'entrée ?</h3>
+<p>L'appli continue de fonctionner normalement. Vos appuis s'accumulent dans une file d'attente (badge « X en attente ») et partent tout seuls dès que le réseau revient — rien à faire de votre côté, rien n'est perdu.</p>
+
+<h3>Bon à savoir</h3>
+<ul>
+  <li>L'écran reste allumé automatiquement pendant que vous comptez ; prévoyez une batterie d'appoint si la soirée est longue.</li>
+  <li>Un appui = une personne. En cas de double-clic accidentel, corrigez avec −1.</li>
+  <li>Si vous changez de porte en cours de service, scannez le QR de la nouvelle entrée avant de continuer à compter — sinon vos clics comptent sur l'ancienne porte.</li>
+  <li>Rien de spécial à faire en fin de service : fermez l'appli, le total reste enregistré.</li>
+</ul>
+
+<!-- ═══════════════════════ ORGANISATEUR ═══════════════════════ -->
+<h2 id="organisateur">Vous préparez l'événement</h2>
+<p>Côté administrateur — à faire avant l'arrivée des opérateurs.</p>
+
+<ol class="steps">
+  <li><strong>Connectez-vous</strong> sur <span class="ui">/admin.html</span> avec le code admin.</li>
+  <li><strong>Créez l'événement</strong> (bouton <span class="ui">+</span>, nom de la soirée).</li>
+  <li><strong>Créez un groupe par entrée</strong> — ici 4 : « Entrée Nord », « Entrée Sud », « Entrée Est », « Entrée Ouest » (bouton <span class="ui">+ Nouveau groupe</span>).</li>
+  <li><strong>Réglez le seuil d'alerte</strong> (capacité max de la salle, carte « Seuil d'alerte ») : une fois atteint, tous les téléphones vibrent et passent en rouge.</li>
+  <li><strong>Générez le QR code de chaque entrée</strong> (carte « QR code — par groupe », un menu déroulant par groupe) et transmettez-le aux téléphones concernés. Un QR par entrée, autant de téléphones que vous voulez dessus — ici 3 par entrée.</li>
+  <li><strong>Le jour J</strong>, surveillez « Opérateurs connectés » pour vérifier que vos 12 téléphones sont bien en ligne, et le tableau par groupe pour repérer une entrée qui décroche.</li>
+</ol>
+
+<div class="callout">
+  <p><strong>Accès lecture seule (PERM).</strong> Créez un code d'accès séparé (carte « Code accès lecture seule ») pour un chef de salle ou la sécurité : il voit le chiffre exact en direct, sans pouvoir modifier quoi que ce soit.</p>
+</div>
+
+<div class="callout danger">
+  <p><strong>Le code admin donne tous les droits</strong> (y compris tout remettre à zéro) — gardez-le pour vous. Ne diffusez le QR/lien de chaque entrée qu'aux opérateurs de cette entrée.</p>
+</div>
+
+<h3>En fin de soirée</h3>
+<ul>
+  <li><span class="ui">Compteurs à zéro</span> — remet les groupes à 0 mais garde l'historique. Utile en cours de soirée (ex. changement de service), pas pour clôturer.</li>
+  <li><span class="ui">Remettre à zéro</span> — remet les groupes à 0 <strong>et efface l'historique</strong>. Irréversible.</li>
+  <li><span class="ui">Archiver</span> — clôt l'événement proprement : il disparaît de la liste active, toutes les données sont conservées.</li>
+  <li><span class="ui">⬇ Exporter XLSX</span> — tableau complet (résumé, historique, détail par groupe) à garder après la soirée.</li>
+</ul>
+
+<!-- ═══════════════════════ CHIFFRE EXACT ═══════════════════════ -->
+<h2 id="chiffre-exact">Où lire le chiffre exact</h2>
+<p>Le même chiffre, partout, en direct :</p>
+<ul>
+  <li>Sur <strong>chaque téléphone opérateur</strong> : le grand chiffre en haut de l'écran.</li>
+  <li>Sur <strong>/admin.html</strong> : carte « Compteur en direct », plus le détail entrée par entrée.</li>
+  <li>Sur <strong>/stats.html</strong> : le même chiffre, avec la courbe dans le temps.</li>
+</ul>
+
+<div class="admin-mock">
+  <h4>Compteur en direct</h4>
+  <div class="am-count">128</div>
+  <div class="am-sub">128 / 300 personnes</div>
+  <table class="am-table">
+    <tbody>
+      <tr><td>Entrée Nord</td><td>34</td></tr>
+      <tr><td>Entrée Sud</td><td>41</td></tr>
+      <tr><td>Entrée Est</td><td>29</td></tr>
+      <tr><td>Entrée Ouest</td><td>24</td></tr>
+    </tbody>
+    <tfoot>
+      <tr><td>Total</td><td class="am-total-num">128</td></tr>
+    </tfoot>
+  </table>
+</div>
+
+<p>Pourquoi ce chiffre reste fiable même avec 12 téléphones qui cliquent à la même seconde : chaque appui ne fait qu'<strong>ajouter ou retirer une personne</strong>, il n'écrase jamais le travail des autres. Douze téléphones peuvent compter au même instant, sur la même entrée ou sur des entrées différentes, sans que rien ne se perde ni ne soit compté en double par l'outil.</p>
+
+<div class="callout warn">
+  <p><strong>Entrée = sortie ou entrée seule ?</strong> Si vos 4 portes servent aussi à faire sortir du monde en cours de soirée, pensez à cliquer <span class="ui">−1</span> à chaque sortie : c'est ce qui garde le chiffre égal au nombre de personnes <em>actuellement présentes</em>. Si les portes ne servent qu'à l'entrée (personne ne ressort par là avant la fin), le chiffre sera un cumul d'entrées — ce qui peut aussi être exactement ce dont vous avez besoin.</p>
+</div>
+
+<!-- ═══════════════════════ FAQ ═══════════════════════ -->
+<h2 id="faq">Questions fréquentes</h2>
+
+<div class="faq-item">
+  <div class="faq-q">Le réseau coupe pile à mon entrée, je perds mon compte ?</div>
+  <div class="faq-a">Non. Chaque appui reste sur le téléphone et part dès que le réseau revient — même après plusieurs minutes hors ligne.</div>
+</div>
+<div class="faq-item">
+  <div class="faq-q">On s'est trompé, +1 de trop ?</div>
+  <div class="faq-a">Cliquez −1 tout de suite. Ça se corrige pour tout le monde, en direct.</div>
+</div>
+<div class="faq-item">
+  <div class="faq-q">On peut ajouter un 13ᵉ téléphone en dernière minute ?</div>
+  <div class="faq-a">Oui — scannez le QR de l'entrée concernée, il rejoint le même compteur que les autres téléphones de cette entrée.</div>
+</div>
+<div class="faq-item">
+  <div class="faq-q">Le total ne correspond pas à notre comptage à la main, pourquoi ?</div>
+  <div class="faq-a">Le cas le plus fréquent : deux opérateurs qui comptent la même personne sur un même flux, ou un −1 oublié à la sortie. Vérifiez que chaque opérateur a un passage clair et unique à surveiller.</div>
+</div>
+<div class="faq-item">
+  <div class="faq-q">Le point est rouge sur mon téléphone, il faut s'inquiéter ?</div>
+  <div class="faq-a">Non — ça veut juste dire que le téléphone n'a pas confirmé sa connexion à l'instant T. Vos appuis restent enregistrés localement et partiront dès que possible.</div>
+</div>
+<div class="faq-item">
+  <div class="faq-q">L'organisateur peut voir qui a compté quoi ?</div>
+  <div class="faq-a">Oui — les prénoms des opérateurs connectés sont visibles dans l'admin, avec des statistiques par opérateur sur la page stats.</div>
+</div>
+
+<footer>Compteur Événement — guide statique, sans connexion requise une fois la page chargée.</footer>
+
+</body>
+</html>
