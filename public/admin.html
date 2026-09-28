@@ -869,10 +869,52 @@ async function deleteArchivedEvent() {
   }
 }
 
+// Onglet « Évolution par groupe » : une colonne par groupe, 1 point / 30 s. Série DÉTAILLÉE
+// seule : la série long terme ne garde que le total, le détail par groupe n'existe donc que
+// sur la fenêtre fine (36 h glissantes, figée à l'archivage).
+// Un groupe supprimé depuis reste dans les anciens points (`g[gid]`) : sa colonne est gardée
+// (nom perdu → libellé générique), sinon la ligne ne se sommait plus sur le total.
+// Cellule vide = groupe pas encore créé à cet instant.
+function groupEvolutionRows(fine, groups, fmt) {
+  const cols  = groups.map(g => ({ id: g.id, name: g.name }));
+  const known = new Set(cols.map(c => c.id));
+  for (const h of fine) {
+    for (const id of Object.keys(h.g || {})) {
+      if (!known.has(id)) { known.add(id); cols.push({ id, name: `Groupe supprimé (${id})` }); }
+    }
+  }
+  const rows = [['Horodatage', ...cols.map(c => c.name), 'Total présents']];
+  for (const h of fine) rows.push([fmt(h.t), ...cols.map(c => h.g?.[c.id] ?? ''), h.c]);
+  return rows;
+}
+
+// Onglet « Par opérateur » = par NOM saisi sur le téléphone (opStats), pas par appareil
+// physique : deux téléphones sous le même nom sont fusionnés, un changement de nom crée une
+// 2e ligne. Une ligne par opérateur × groupe (changer de porte → une ligne par porte).
+// Cumuls depuis la création (conservés par la RAZ compteurs) : aucune évolution dans le
+// temps n'est enregistrée par opérateur.
+// « (non attribué) » = écart avec le total du groupe (comptage sans nom, ou au-delà de
+// MAX_OPS=100 noms par groupe) → les colonnes se somment toujours sur l'onglet « Groupes ».
+function operatorRows(groups) {
+  const ops = [], rest = [];
+  for (const g of groups) {
+    let sIn = 0, sOut = 0;
+    for (const [name, s] of Object.entries(g.opStats || {})) {
+      sIn += s.in; sOut += s.out;
+      ops.push([name, g.name, s.in, s.out, s.in - s.out]);
+    }
+    const dIn = g.totalIn - sIn, dOut = g.totalOut - sOut;
+    if (dIn > 0 || dOut > 0) rest.push(['(non attribué)', g.name, dIn, dOut, dIn - dOut]);
+  }
+  // Tri stable : les lignes d'un même opérateur restent dans l'ordre des groupes.
+  ops.sort((a, b) => a[0].localeCompare(b[0], 'fr'));
+  return [['Opérateur', 'Groupe', 'Entrées', 'Sorties', 'Net'], ...ops, ...rest];
+}
+
 // U8: Export XLSX (SheetJS)
 // L'onglet « Historique » FUSIONNE les deux séries — sinon l'export était tronqué à la
-// fenêtre fine (48h) alors que la série longue couvre 60 jours : d'abord le long terme
-// (5 min, total seul) jusqu'au premier point détaillé, puis le détaillé (1 min).
+// fenêtre fine (36 h) alors que la série longue couvre 60 jours : d'abord le long terme
+// (5 min, total seul) jusqu'au premier point détaillé, puis le détaillé (30 s).
 async function exportXLSX() {
   if (!currentEvent || typeof XLSX === 'undefined') return;
   try {
@@ -900,6 +942,8 @@ async function exportXLSX() {
       ['Période couverte', merged.length ? `${fmt(merged[0].t)} → ${fmt(merged[merged.length - 1].t)}` : '—'],
       ['Série détaillée', '1 point / 30 secondes — 36 h glissantes'],
       ['Série long terme', '1 point / 5 minutes — 60 jours glissants'],
+      ['Évolution par groupe', fine.length ? `${fmt(fine[0].t)} → ${fmt(fine[fine.length - 1].t)} — série détaillée seulement (la série long terme ne garde que le total)` : '—'],
+      ['Par opérateur', 'Totaux par nom d\'opérateur et par groupe depuis la création — pas d\'évolution dans le temps (non enregistrée)'],
       ['Exporté le', fmt(Date.now())],
       [],
       ['Lecture', '« Présents » = occupation à cet instant (un −1 la fait redescendre) ; « Entrées/Sorties cumulées » = compteurs cumulés depuis la création, jamais remis à zéro par la RAZ compteurs.'],
@@ -913,6 +957,9 @@ async function exportXLSX() {
     const grpRows = [['Groupe', 'Compteur', 'Entrées', 'Sorties']];
     for (const g of data.groups) grpRows.push([g.name, g.count, g.totalIn, g.totalOut]);
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(grpRows), 'Groupes');
+
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(groupEvolutionRows(fine, data.groups, fmt)), 'Évolution par groupe');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(operatorRows(data.groups)), 'Par opérateur');
 
     const fname = (evt?.name ?? 'export').replace(/[^\w]/g, '_');
     XLSX.writeFile(wb, `${fname}_${new Date().toISOString().slice(0, 10)}.xlsx`);
