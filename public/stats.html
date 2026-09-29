@@ -37,13 +37,16 @@
       font-weight: 600; margin-bottom: 12px;
     }
     .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px; margin-bottom: 12px; }
-    input[type="password"], select {
+    input.secret, select {
       width: 100%; padding: 11px 14px; border-radius: 10px;
       border: 1px solid var(--border); background: var(--bg);
       color: var(--text); font-size: 16px; margin-bottom: 8px;
       outline: none; appearance: auto;
     }
     input:focus, select:focus { border-color: var(--accent); }
+    /* Champ « code » : type=text masqué en CSS. Un vrai type=password fait proposer
+       « Enregistrer le mot de passe ? » à chaque connexion (Safari, Chrome). */
+    input.secret { -webkit-text-security: disc; }
     button {
       width: 100%; padding: 12px; border-radius: 10px; border: none;
       background: var(--accent); color: #fff; font-size: 15px;
@@ -111,7 +114,9 @@
   <h1>Statistiques</h1>
   <div class="card">
     <h2>Connexion admin</h2>
-    <input type="password" id="code" placeholder="Code admin" autocomplete="current-password">
+    <input type="text" class="secret" id="code" placeholder="Code admin"
+           autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+           data-1p-ignore data-lpignore="true" data-bwignore>
     <button onclick="loadStats()">Accéder</button>
     <div class="toast" id="err"></div>
   </div>
@@ -228,6 +233,15 @@ function fetchT(url, opts, ms = 6000) {
   const t = setTimeout(() => ctrl.abort(), ms);
   return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(t));
 }
+
+// Repli du champ « code » (`input.secret`, cf. CSS) : si le navigateur ne sait pas masquer
+// en CSS (Firefox), retour à type=password — mieux vaut la question « Enregistrer le mot de
+// passe ? » que le code affiché en clair.
+function maskSecretFields() {
+  if (window.CSS && CSS.supports && CSS.supports('-webkit-text-security', 'disc')) return;
+  document.querySelectorAll('input.secret').forEach(el => { el.type = 'password'; });
+}
+maskSecretFields();
 
 // ── Login ──
 

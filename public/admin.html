@@ -42,6 +42,9 @@
       outline: none; appearance: auto;
     }
     input:focus, select:focus { border-color: var(--accent); }
+    /* Champs « code » : type=text masqué en CSS. Un vrai type=password fait proposer
+       « Enregistrer le mot de passe ? » à chaque connexion (Safari, Chrome). */
+    input.secret { -webkit-text-security: disc; }
     button {
       width: 100%; padding: 12px; border-radius: 10px; border: none;
       background: var(--accent); color: #fff; font-size: 15px;
@@ -170,7 +173,9 @@
   <h1>Administration</h1>
   <div class="card">
     <h2>Connexion</h2>
-    <input type="password" id="code-input" placeholder="Code admin" autocomplete="current-password">
+    <input type="text" class="secret" id="code-input" placeholder="Code admin"
+           autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+           data-1p-ignore data-lpignore="true" data-bwignore>
     <button onclick="login()">Se connecter</button>
     <div class="toast" id="login-err"></div>
   </div>
@@ -178,7 +183,9 @@
   <h1 class="section-title">Graphiques</h1>
   <div class="card">
     <h2>Connexion</h2>
-    <input type="password" id="stats-code-input" placeholder="Code admin" autocomplete="current-password">
+    <input type="text" class="secret" id="stats-code-input" placeholder="Code admin"
+           autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+           data-1p-ignore data-lpignore="true" data-bwignore>
     <button onclick="loginStats()">Se connecter</button>
     <div class="toast" id="stats-login-err"></div>
   </div>
@@ -265,7 +272,9 @@
     <!-- Change admin code -->
     <div class="card" id="card-code">
       <h2>Changer le code admin</h2>
-      <input type="password" id="new-code" placeholder="Nouveau code (min. 4 caractères)">
+      <input type="text" class="secret" id="new-code" placeholder="Nouveau code (min. 4 caractères)"
+             autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+             data-1p-ignore data-lpignore="true" data-bwignore>
       <button onclick="changeCode()">Changer le code</button>
       <div class="toast" id="code-toast"></div>
     </div>
@@ -274,7 +283,9 @@
     <div class="card" id="card-perm">
       <h2>Code accès lecture seule (PERM)</h2>
       <label>Accès en lecture uniquement — sans droit de modification. Laisser vide pour désactiver.</label>
-      <input type="password" id="perm-code-input" placeholder="Code PERM (min. 4 caractères)">
+      <input type="text" class="secret" id="perm-code-input" placeholder="Code PERM (min. 4 caractères)"
+             autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+             data-1p-ignore data-lpignore="true" data-bwignore>
       <button onclick="savePermCode()">Enregistrer</button>
       <div class="toast" id="perm-toast"></div>
     </div>
@@ -375,6 +386,15 @@ function esc(s) {
 function qs(params) {
   return new URLSearchParams(params).toString();
 }
+
+// Repli des champs « code » (`input.secret`, cf. CSS) : si le navigateur ne sait pas masquer
+// en CSS (Firefox), retour à type=password — mieux vaut la question « Enregistrer le mot de
+// passe ? » que le code affiché en clair.
+function maskSecretFields() {
+  if (window.CSS && CSS.supports && CSS.supports('-webkit-text-security', 'disc')) return;
+  document.querySelectorAll('input.secret').forEach(el => { el.type = 'password'; });
+}
+maskSecretFields();
 
 // ── Login ──
 

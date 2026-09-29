@@ -366,20 +366,6 @@
       #main-btns { grid-template-columns: 1.18fr 1fr; }
     }
 
-    /* ── Alert overlay ── */
-    #alert-overlay {
-      position: fixed; inset: 0;
-      pointer-events: none;
-      opacity: 0;
-      background: rgba(239, 68, 68, 0.12);
-      transition: opacity 0.3s;
-    }
-    #alert-overlay.show { opacity: 1; animation: pulse-red 1.4s ease-in-out infinite; }
-    @keyframes pulse-red {
-      0%, 100% { background: rgba(239,68,68,0.08); }
-      50%       { background: rgba(239,68,68,0.22); }
-    }
-
     /* ── Overlay saisie du prénom ── */
     #name-overlay {
       display: none;
@@ -601,8 +587,6 @@
   <button class="btn-small" id="btn-m5">−5</button>
 </div>
 
-<div id="alert-overlay"></div>
-
 <!-- Overlay saisie manuelle du lien — copié-collé quand l'URL est invalide -->
 <div id="link-overlay">
   <div id="link-card">
@@ -773,8 +757,9 @@ function persistDisplay() {
 // D'où le bip, synthétisé en Web Audio : pas de fichier à charger, donc ça marche aussi
 // en LAN sans internet. iOS exige que le contexte audio naisse d'un geste utilisateur →
 // on l'amorce au premier appui sur un bouton de comptage (cf. bindTapBtn).
-// Limite : si l'iPhone est en mode silencieux, le bip ne sort pas. L'overlay rouge
-// plein écran reste le signal qui, lui, ne dépend de rien.
+// Limite : si l'iPhone est en mode silencieux, le bip ne sort pas. Le signal visuel, lui,
+// ne dépend de rien : chiffre et barre passent au rouge (`.state-danger`, cf. setCount).
+// Volontairement PAS de fond rouge plein écran qui clignote : jugé trop anxiogène.
 let _audioCtx = null;
 
 function primeAudio() {
@@ -808,9 +793,6 @@ function triggerAlert(active) {
   if (active && !alertActive) {
     if (navigator.vibrate) navigator.vibrate([300, 100, 300, 100, 300]);
     beep();
-    document.getElementById('alert-overlay').classList.add('show');
-  } else if (!active) {
-    document.getElementById('alert-overlay').classList.remove('show');
   }
   alertActive = active;
 }
