@@ -557,9 +557,13 @@ async function loadQR(groupId) {
   } catch {}
 }
 
+// Adresses réseau sous le QR. Le <div id="ip-list"> est commenté dans le HTML (f6e083c) :
+// sans élément il n'y a rien à afficher → on sort avant le fetch. Le décommenter suffit à
+// réactiver l'affichage. Sans ce garde : TypeError (promesse rejetée) à chaque connexion
+// sans événement et à chaque ouverture du WS.
 async function loadIPs() {
   const el = document.getElementById('ip-list');
-  if (el.dataset.loaded) return;
+  if (!el || el.dataset.loaded) return;
   try {
     const ipd = await fetchT(`/api/ips?${qs({ code: adminCode })}`).then(r => r.json());
     if (ipd.ips && ipd.ips.length) {
