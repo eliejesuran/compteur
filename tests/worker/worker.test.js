@@ -30,6 +30,27 @@ async function state(e, g) {
   return { status: r.status, body: await r.json() };
 }
 
+// ── Coquille hors ligne ──────────────────────────────────────────────────────
+
+describe('Service worker (coquille hors ligne)', () => {
+  // La portée d'un service worker est le dossier de son script : il DOIT être servi à la
+  // racine, sinon il ne contrôle pas « /?e=…&g=… ». Et sans type JavaScript, le
+  // navigateur refuse de l'enregistrer.
+  it('/sw.js est servi à la racine avec un type JavaScript', async () => {
+    const r = await SELF.fetch(`${BASE}/sw.js`);
+    expect(r.status).toBe(200);
+    expect(r.headers.get('content-type')).toMatch(/javascript/);
+    expect(await r.text()).toContain("addEventListener('fetch'");
+  });
+
+  // Le service worker précache « / » : ce doit être un vrai 200, pas une redirection.
+  it('« / » répond 200 en HTML, sans redirection', async () => {
+    const r = await SELF.fetch(`${BASE}/`, { redirect: 'manual' });
+    expect(r.status).toBe(200);
+    expect(r.headers.get('content-type')).toMatch(/text\/html/);
+  });
+});
+
 // ── Création / auth ──────────────────────────────────────────────────────────
 
 describe('POST /api/events — création', () => {

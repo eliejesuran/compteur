@@ -541,6 +541,26 @@ describe('GET /api/qr', () => {
   });
 });
 
+// ── Coquille hors ligne ───────────────────────────────────────────────────────
+
+describe('Service worker (coquille hors ligne)', () => {
+  // La portée d'un service worker est le dossier de son script : il DOIT être servi à la
+  // racine, sinon il ne contrôle pas « /?e=…&g=… ». Et sans type JavaScript, le
+  // navigateur refuse de l'enregistrer.
+  test('/sw.js est servi à la racine avec un type JavaScript', async () => {
+    const res = await request(server).get('/sw.js');
+    assert.equal(res.status, 200);
+    assert.match(res.headers['content-type'], /javascript/);
+  });
+
+  // Le service worker précache « / » : ce doit être un vrai 200, pas une redirection.
+  test('« / » répond 200 en HTML, sans redirection', async () => {
+    const res = await request(server).get('/').redirects(0);
+    assert.equal(res.status, 200);
+    assert.match(res.headers['content-type'], /text\/html/);
+  });
+});
+
 // ── GET /api/ips ──────────────────────────────────────────────────────────────
 
 describe('GET /api/ips', () => {
