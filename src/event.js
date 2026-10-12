@@ -3,6 +3,10 @@ import QRCode from 'qrcode';
 
 const MAX_GROUPS = 20;  // R4/L1 : groupes max par événement
 const MAX_OPS    = 100; // R4/L2 : opérateurs distincts trackés (opStats) par groupe
+// uuid d'une op : 36 car. (crypto.randomUUID) ou ~40 (repli N6). 2 500 uuid sont persistés
+// dans UNE clé (`seen`, 2 Mo max) : sans borne, quelques envois de 100 ko la faisaient
+// déborder et _save() échouait.
+const MAX_UUID_LEN = 64; // — aligné local/cloud
 // Historique FIN : 1 point / 30 s, plafond 4320 pts = 36 h de détail.
 // 30 s (et non 60 s) : besoin métier = sortir un événement de 24 h point par point
 // toutes les 30 s. 4320 et non 2880 (= pile 24 h) car un event NON ARCHIVÉ continue
@@ -30,6 +34,13 @@ async function generateQR(url) {
 
 function makeGroup(id, name) {
   return { id, name, count: 0, totalIn: 0, totalOut: 0, opStats: {} };
+}
+
+// Lecture d'une clé FOURNIE PAR UN CLIENT (id de groupe, prénom) : jamais `obj[cle]` nu.
+// « __proto__ », « constructor », « toString »… y trouvent une propriété HÉRITÉE
+// d'Object.prototype au lieu de rien — et une écriture derrière pollue tout l'isolate.
+function own(obj, key) {
+  return (typeof key === 'string' && Object.hasOwn(obj, key)) ? obj[key] : undefined;
 }
 
 // Réduit l'historique fin [{t,c,g}] en série grossière [{t,c}] : 1 point / bucket de 5 min
@@ -172,6 +183,29 @@ export class EventDO extends DurableObject {
     return Object.values(this._s.groups).map(g => ({ id: g.id, name: g.name, count: g.count }));
   }
 
+  _groupName(groupId) {
+    return (this._s && groupId) ? (own(this._s.groups, groupId)?.name ?? null) : null;
+  }
+
+  // Le TOTAL d'un événement n'est jamais négatif — un GROUPE, si : une porte de sortie
+  // compte en négatif ce qu'une porte d'entrée a compté en positif (décision Elie, 2026-10-12).
+  // Le comptage le garantit déjà (bornage). Ce qui pouvait le casser : retirer la part d'un
+  // groupe d'entrée alors qu'un groupe de sortie est négatif (suppression ou remise à zéro
+  // d'UN groupe). On remonte alors les groupes négatifs — le plus négatif d'abord — jusqu'à
+  // ce que le total vaille 0. Les cumuls (totalIn/out) ne bougent pas : personne n'est passé.
+  _floorTotalAtZero() {
+    let deficit = -this._total();
+    if (deficit <= 0) return false;
+    const negatives = Object.values(this._s.groups).filter(g => g.count < 0).sort((a, b) => a.count - b.count);
+    for (const grp of negatives) {
+      const up = Math.min(deficit, -grp.count);
+      grp.count += up;
+      deficit -= up;
+      if (deficit === 0) break;
+    }
+    return true;
+  }
+
   _broadcast(delta) {
     const total = this._total();
     const msg = JSON.stringify({
@@ -198,19 +232,13 @@ export class EventDO extends DurableObject {
       const a = ws.deserializeAttachment() ?? {};
       if (!a.name || seen.has(a.name)) continue;
       seen.add(a.name);
-      clients.push({
-        name: a.name,
-        groupName: a.groupId ? (this._s.groups[a.groupId]?.name ?? null) : null,
-      });
+      clients.push({ name: a.name, groupName: this._groupName(a.groupId) });
     }
     // U4: recently disconnected (grace period 30s)
     for (const [name, v] of this._recentlyDisc) {
       if (seen.has(name)) continue;
       seen.add(name);
-      clients.push({
-        name,
-        groupName: v.groupId ? (this._s?.groups[v.groupId]?.name ?? null) : null,
-      });
+      clients.push({ name, groupName: this._groupName(v.groupId) });
     }
     const msg = JSON.stringify({ type: 'clients', clients });
     for (const ws of this.ctx.getWebSockets()) {
@@ -289,7 +317,7 @@ export class EventDO extends DurableObject {
       if (!this._s) return Response.json({ error: 'event not found' }, { status: 404 });
       const { g, capacity, reset, name, archived, deleteGroup } = body ?? {};
       if (g) {
-        const grp = this._s.groups[g];
+        const grp = own(this._s.groups, g);
         if (grp) {
           if (typeof name === 'string' && name.trim()) grp.name = name.trim().slice(0, 40);
           if (deleteGroup === true) {
@@ -307,9 +335,13 @@ export class EventDO extends DurableObject {
             }
           }
           if (reset === true) { grp.count = 0; grp.totalIn = 0; grp.totalOut = 0; grp.opStats = {}; }
+          // Suppression ou remise à zéro d'UN groupe : sa part quitte le total, qui ne doit
+          // pas passer sous 0 pour autant (cf. _floorTotalAtZero).
+          this._floorTotalAtZero();
         }
       } else {
-        if (Number.isFinite(capacity) && capacity > 0) this._s.capacity = Math.round(capacity);
+        // max(1, …) : 0,4 passait le test `> 0` puis s'arrondissait à 0 → alerte permanente.
+        if (Number.isFinite(capacity) && capacity > 0) this._s.capacity = Math.max(1, Math.round(capacity));
         if (typeof name === 'string' && name.trim()) this._s.name = name.trim().slice(0, 40);
         if (archived === true) {
           this._s.archived = true;
@@ -348,10 +380,12 @@ export class EventDO extends DurableObject {
         return new Response('Too Many Requests', { status: 429, headers: { 'Retry-After': '1' } });
       }
       const { delta, uuid, name: opName, g } = body ?? {};
-      if (!uuid || ![-5, -1, 1, 5].includes(delta) || !g) {
+      // uuid : du TEXTE, borné. Un objet ne se compare pas par valeur (deux envois
+      // « identiques » = deux objets) : la déduplication ne le reconnaissait jamais.
+      if (typeof uuid !== 'string' || !uuid || uuid.length > MAX_UUID_LEN || ![-5, -1, 1, 5].includes(delta) || !g) {
         return Response.json({ error: 'invalid' }, { status: 400 });
       }
-      const grp = this._s.groups[g];
+      const grp = own(this._s.groups, g);
       if (!grp) return Response.json({ error: 'group not found' }, { status: 404 });
 
       if (this._seen.has(uuid)) return Response.json({ total: this._total(), dup: true });
@@ -363,6 +397,9 @@ export class EventDO extends DurableObject {
 
       // Un groupe peut devenir négatif (entrée par un groupe, sortie par un autre) ;
       // seul le TOTAL de l'event est borné à 0. `eff` = delta effectivement appliqué.
+      // La formule suppose cur ≥ 0 : avec un total négatif (état d'avant _floorTotalAtZero),
+      // un « −1 » appliquait +|cur| et l'inscrivait en ENTRÉES. On s'en assure donc d'abord.
+      this._floorTotalAtZero();
       const cur = this._total();
       const eff = (cur + delta < 0) ? -cur : delta;
       grp.count += eff;
@@ -373,10 +410,13 @@ export class EventDO extends DurableObject {
         const n = opName.trim().slice(0, 32);
         // R4/L2 : un nouveau nom au-delà de MAX_OPS n'est plus tracké (opStats),
         // mais le comptage total/groupe reste intact — jamais de perte de compte.
-        if (n && (grp.opStats[n] || Object.keys(grp.opStats).length < MAX_OPS)) {
-          if (!grp.opStats[n]) grp.opStats[n] = { in: 0, out: 0 };
-          if (eff > 0) grp.opStats[n].in  += eff;
-          else         grp.opStats[n].out += -eff;
+        // Le prénom est une clé d'objet : `own()` pour « constructor », « toString »… (sinon
+        // jamais suivis) ; « __proto__ » ne peut pas être une clé ordinaire → pas suivi.
+        let stat = own(grp.opStats, n);
+        if (n && n !== '__proto__' && (stat || Object.keys(grp.opStats).length < MAX_OPS)) {
+          if (!stat) stat = grp.opStats[n] = { in: 0, out: 0 };
+          if (eff > 0) stat.in  += eff;
+          else         stat.out += -eff;
         }
       }
 
@@ -403,7 +443,7 @@ export class EventDO extends DurableObject {
     // GET /state?g=X
     if (path === '/state' && request.method === 'GET') {
       const g = url.searchParams.get('g');
-      const grp = this._s.groups[g];
+      const grp = own(this._s.groups, g);
       if (!grp) return Response.json({ error: 'group not found' }, { status: 404 });
       return Response.json({
         total:      this._total(),
@@ -469,21 +509,13 @@ export class EventDO extends DurableObject {
         const a = ws.deserializeAttachment() ?? {};
         if (!a.name || seen.has(a.name)) continue;
         seen.add(a.name);
-        clients.push({
-          name:        a.name,
-          groupName:   a.groupId ? (this._s.groups[a.groupId]?.name ?? null) : null,
-          connectedAt: a.connectedAt,
-        });
+        clients.push({ name: a.name, groupName: this._groupName(a.groupId), connectedAt: a.connectedAt });
       }
       // U4: recently disconnected (grace period 30s)
       for (const [name, v] of this._recentlyDisc) {
         if (seen.has(name) || now - v.disconnectedAt > 30_000) continue;
         seen.add(name);
-        clients.push({
-          name,
-          groupName:   v.groupId ? (this._s.groups[v.groupId]?.name ?? null) : null,
-          connectedAt: null,
-        });
+        clients.push({ name, groupName: this._groupName(v.groupId), connectedAt: null });
       }
       return Response.json({ clients });
     }
@@ -493,7 +525,7 @@ export class EventDO extends DurableObject {
       const g      = url.searchParams.get('g');
       const opUrl  = url.searchParams.get('url');
       if (!g || !opUrl) return Response.json({ error: 'g and url required' }, { status: 400 });
-      if (!this._s.groups[g]) return Response.json({ error: 'group not found' }, { status: 404 });
+      if (!own(this._s.groups, g)) return Response.json({ error: 'group not found' }, { status: 404 });
       if (this._qrCache?.url === opUrl) {
         return Response.json({ qr: this._qrCache.qr, url: opUrl });
       }
@@ -510,12 +542,8 @@ export class EventDO extends DurableObject {
     const url = new URL(request.url);
     const groupId = url.searchParams.get('g');
 
-    if (!this._s || this._s.archived) {
-      return new Response('Event not found', { status: 404 });
-    }
-    if (groupId && !this._s.groups[groupId]) {
-      return new Response('Group not found', { status: 404 });
-    }
+    if (!this._s || this._s.archived) return this._refuseWS('Event not found');
+    if (groupId && !own(this._s.groups, groupId)) return this._refuseWS('Group not found');
 
     const [client, server] = Object.values(new WebSocketPair());
     this.ctx.acceptWebSocket(server);
@@ -537,15 +565,26 @@ export class EventDO extends DurableObject {
       const a = ws.deserializeAttachment() ?? {};
       if (!a.name || seen.has(a.name)) continue;
       seen.add(a.name);
-      currentClients.push({
-        name:      a.name,
-        groupName: a.groupId ? (this._s.groups[a.groupId]?.name ?? null) : null,
-      });
+      currentClients.push({ name: a.name, groupName: this._groupName(a.groupId) });
     }
     if (currentClients.length > 0) {
       server.send(JSON.stringify({ type: 'clients', clients: currentClients }));
     }
 
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  // Lien mort (événement inconnu, archivé, supprimé ; groupe supprimé) : on ACCEPTE la
+  // connexion pour pouvoir la fermer avec le code 4004, comme le serveur local. Un refus
+  // HTTP (404) au handshake n'arrive au navigateur que comme une coupure anonyme (1006) :
+  // l'opérateur voyait « Hors ligne », une reconnexion en boucle, et jamais « Événement
+  // introuvable » ni le bouton de saisie du lien.
+  // accept() simple, PAS acceptWebSocket() : ce socket ne vit que le temps de sa fermeture,
+  // il ne doit ni compter parmi les opérateurs ni réveiller les handlers d'hibernation.
+  _refuseWS(reason) {
+    const [client, server] = Object.values(new WebSocketPair());
+    server.accept();
+    server.close(4004, reason);
     return new Response(null, { status: 101, webSocket: client });
   }
 

@@ -806,6 +806,15 @@ function setOnline(online) {
   document.getElementById('status-text').textContent = online ? 'En ligne' : 'Hors ligne';
 }
 
+// La file vit d'abord en MÉMOIRE ; localStorage n'en est que la copie qui survit à un
+// rechargement. Il peut être INUTILISABLE (WebView dont le stockage DOM est désactivé →
+// `localStorage` vaut null, cookies bloqués, quota plein) : ça ne doit ni interrompre un
+// appui ni couper une passe de flush(). Sans ce garde, l'exception arrêtait la passe après
+// CHAQUE op — la file ne se vidait plus qu'à une op toutes les 2 s.
+function saveQueue() {
+  try { localStorage.setItem('op_queue', JSON.stringify(queue)); } catch {}
+}
+
 function renderQueueBadge() {
   const badge = document.getElementById('queue-badge');
   if (queue.length > 0) {
@@ -837,7 +846,7 @@ function tap(delta) {
   const op = { delta, uuid, e: EVENT_ID, g: GROUP_ID };
   if (opName) op.name = opName;
   queue.push(op);
-  localStorage.setItem('op_queue', JSON.stringify(queue));
+  saveQueue();
   renderQueueBadge();
   flush();
 }
@@ -865,23 +874,31 @@ async function flush() {
           body: JSON.stringify(op),
         });
         if (!res.ok) {
-          if (res.status === 429 || res.status >= 500) {
-            // 429 rate-limité ou 5xx transitoire — NE PAS jeter : réessayer plus tard
-            // (setInterval 2s / online / visibilitychange relancent flush). Sinon un
-            // pic de rate-limit perdrait des comptes en les shift()ant en boucle.
-            break;
-          }
-          // autres 4xx — requête invalide ou événement introuvable : l'op ne passera jamais
+          // Une op n'est JETÉE que sur un refus définitif de NOTRE API : 400 ou 404 répondu
+          // en JSON avec un champ `error` (événement archivé, groupe supprimé) — elle ne
+          // passera jamais, et la garder bloquerait toutes les suivantes.
+          // Tout le reste se GARDE et se réessaie (setInterval 2s / online / visibilitychange
+          // relancent flush) : 429 et 5xx, mais aussi 401 / 403 / 407 / 408… Ceux-là ne
+          // viennent jamais de notre API sur /api/count : ils viennent de ce qu'il y a
+          // devant (pare-feu ou défi anti-bot, proxy, portail captif d'un Wi-Fi public).
+          // Les jeter perdait des comptages en silence.
+          const refus = (res.status === 400 || res.status === 404) ? await res.json().catch(() => null) : null;
+          if (!refus || typeof refus.error !== 'string') break;
           queue.shift();
-          localStorage.setItem('op_queue', JSON.stringify(queue));
+          saveQueue();
           renderQueueBadge();
           continue;
         }
         const data = await res.json();
+        // Un 200 sans `total` ne vient pas de notre API (page de portail servie en JSON…) :
+        // l'op n'est PAS acquittée.
+        if (!data || typeof data.total !== 'number') break;
         queue.shift();
-        localStorage.setItem('op_queue', JSON.stringify(queue));
+        saveQueue();
         renderQueueBadge();
-        if (!data.dup) setCount(data.total); // setCount déclenche déjà triggerAlert
+        // setCount déclenche déjà triggerAlert. Le total d'un AUTRE événement (op restée en
+        // file avant un changement de lien) n'a rien à faire à l'écran de celui-ci.
+        if (!data.dup && op.e === EVENT_ID) setCount(data.total);
       } catch {
         break; // réseau indisponible — réessayer plus tard
       }

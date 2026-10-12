@@ -193,6 +193,7 @@ let fullHistory = [];       // historique fin 60s (48h) — vues 2h/6h/24h/48h
 let fullHistoryCoarse = []; // historique grossier 5min (60j, total seul) — vues 7j/30j/début
 let lastTotal = 0;      // total live (WS)
 let lastGroups = [];    // groupes live (WS)
+let statGroups = [];    // groupes faisant foi (dernier /api/history) : entrées/sorties + opStats
 let chartWindowH = 24;  // fenêtre affichée en heures ; 0 = depuis le début
 
 function esc(s) {
@@ -214,8 +215,18 @@ function historyParams() {
   return p;
 }
 
+// Rend `null` si une autre lecture a été lancée entre-temps : la réponse est alors périmée
+// (autre fenêtre, autre événement). Deux clics rapprochés sur les fenêtres, ou un
+// changement d'événement pendant le rafraîchissement de 60 s, font revenir les réponses
+// dans le désordre — appliquée telle quelle, la réponse « 30 j » vidait la série fine de
+// la vue « 2 h », et les chiffres de l'ancien événement s'affichaient sous le nouveau.
+let historySeq = 0;
+
 function fetchHistory() {
-  return fetchT(`/api/history?${qs(historyParams())}`).then(r => r.json());
+  const seq = ++historySeq;
+  return fetchT(`/api/history?${qs(historyParams())}`)
+    .then(r => r.json())
+    .then(d => (seq === historySeq ? d : null));
 }
 
 // N'écrase que la série effectivement demandée : l'autre est renvoyée vide par le
@@ -293,7 +304,8 @@ async function switchEvent(id) {
   if (statsWs) { statsWs.close(); statsWs = null; }
   if (chart) { chart.destroy(); chart = null; }
   peak = 0; totalIn = 0; groupDatasets = {};
-  fullHistory = []; fullHistoryCoarse = []; lastTotal = 0; lastGroups = [];
+  fullHistory = []; fullHistoryCoarse = []; lastTotal = 0; lastGroups = []; statGroups = [];
+  clearTimeout(liveStatsTimer); liveStatsTimer = null; liveStatsAgain = false;
   document.getElementById('s-peak').textContent = '–';
   document.getElementById('s-in').textContent   = '–';
   document.getElementById('s-count').textContent = '–';
@@ -306,6 +318,13 @@ async function switchEvent(id) {
 
 async function loadEventStats(eventId) {
   const data = await fetchHistory();
+  if (!data) {
+    // Périmée : une autre lecture est partie entre-temps (clic sur une fenêtre,
+    // rafraîchissement de 60 s). Celle-là ne remplit ni les tuiles ni n'ouvre le
+    // WebSocket : on relit donc ici, tant que l'événement est toujours celui-ci.
+    if (currentEvent === eventId) return loadEventStats(eventId);
+    return;
+  }
 
   // Pic fourni par le serveur : il balaie les DEUX séries (jusqu'à 60 j). Le calculer ici
   // sur `data.history` ne voyait que la fenêtre fine → le pic « repartait » toutes les 48 h,
@@ -325,8 +344,7 @@ async function loadEventStats(eventId) {
   lastGroups  = data.groups || [];
   renderChart();
 
-  renderGroups(data.groups || []);
-  renderOpStats(data.groups || []);
+  applyGroupStats(data);
 
   connectWS(eventId);
 }
@@ -370,8 +388,10 @@ function renderGroups(groups) {
 
 function renderOpStats(groups) {
   // Combine opStats across all groups
-  const combined = {};
-  const opGroup = {}; // name → group name (last seen)
+  // Objets SANS prototype : le prénom sert de clé, et « constructor » ou « toString »
+  // trouveraient sinon une propriété héritée au lieu de rien.
+  const combined = Object.create(null);
+  const opGroup = Object.create(null); // name → group name (last seen)
   for (const g of groups) {
     for (const [name, s] of Object.entries(g.opStats || {})) {
       if (!combined[name]) combined[name] = { in: 0, out: 0 };
@@ -396,6 +416,72 @@ function renderOpStats(groups) {
       <span class="op-net">${s.in - s.out} net</span>
     </div>`
   ).join('');
+}
+
+// ── Stats par groupe / par opérateur en direct ──
+// Le WS `update` ne transporte que le total et le `count` de chaque groupe. Entrées/sorties
+// par groupe et chiffres par opérateur ne sortent que de /api/history, DERRIÈRE LE CODE :
+// le WS, lui, n'est pas authentifié (S5) — on n'y met donc pas le détail par opérateur.
+// Avant, ces tableaux n'étaient remplis qu'à l'ouverture de la page : ils restaient figés
+// pendant que les tuiles du haut bougeaient. Maintenant chaque `update` déclenche une
+// relecture MINIMALE de /api/history (cf. refreshLiveStats).
+
+// Ce qu'on affiche : le dernier relevé faisant foi, avec par-dessus le `count` du WS
+// (toujours en avance d'une requête — sans ça un count pouvait reculer d'un cran).
+function liveGroups() {
+  if (!lastGroups.length) return statGroups;
+  const byId = new Map(statGroups.map(g => [g.id, g]));
+  return lastGroups.map(g => ({ totalIn: 0, totalOut: 0, ...byId.get(g.id), name: g.name, count: g.count }));
+}
+
+function applyGroupStats(d) {
+  if (!Array.isArray(d.groups)) return;
+  statGroups = d.groups;
+  // Sans WS ouvert, rien n'est plus frais que cette réponse : ses counts font foi.
+  if (!statsWs || statsWs.readyState !== 1) lastGroups = d.groups;
+  renderGroups(liveGroups());
+  renderOpStats(statGroups);
+}
+
+// Au plus une relecture par seconde, jamais deux en même temps, et une dernière après la
+// rafale (sinon les clics arrivés pendant la requête ne seraient affichés qu'au refresh 60 s).
+const LIVE_STATS_MIN_MS = 1000;
+let liveStatsTimer = null;
+let liveStatsBusy  = false;
+let liveStatsAgain = false;
+let liveStatsLast  = 0;
+
+function scheduleLiveStats() {
+  if (liveStatsBusy) { liveStatsAgain = true; return; }
+  if (liveStatsTimer) return;
+  liveStatsTimer = setTimeout(refreshLiveStats, Math.max(0, LIVE_STATS_MIN_MS - (Date.now() - liveStatsLast)));
+}
+
+async function refreshLiveStats() {
+  liveStatsTimer = null;
+  if (!currentEvent || document.hidden) return; // au retour au 1er plan, le WS `init` resynchronise
+  const eventId = currentEvent;
+  liveStatsBusy = true; liveStatsAgain = false; liveStatsLast = Date.now();
+  try {
+    // since = maintenant → aucun point d'historique dans la réponse : seulement les
+    // groupes, leurs opStats et les cumuls. NE PAS passer par applyHistory() : elle
+    // remplacerait la série affichée par ce tableau vide.
+    const r = await fetchT(`/api/history?${qs({ code: adminCode, e: eventId, series: 'fine', since: String(Date.now()) })}`);
+    const d = r.ok ? await r.json() : null;
+    if (d && currentEvent === eventId) {
+      // Resync du cumul au passage (le +delta optimiste du WS dérive, bornage à 0) — sauf
+      // si un clic est arrivé pendant la requête : la réponse est alors en retard sur le
+      // WS, et l'appliquer ferait reculer la tuile « Entrées » jusqu'à la relecture suivante.
+      if (!liveStatsAgain) {
+        totalIn = d.totalIn ?? totalIn;
+        document.getElementById('s-in').textContent = totalIn;
+        updateLivePoint();
+      }
+      applyGroupStats(d);
+    }
+  } catch {}
+  liveStatsBusy = false;
+  if (liveStatsAgain) scheduleLiveStats();
 }
 
 // ── Chart ──
@@ -532,6 +618,10 @@ function selectedSeries() {
 // (Re)construit le graphe à partir de la série filtrée + point « maintenant ».
 function renderChart() {
   if (chart) { chart.destroy(); chart = null; }
+  // Chart.js vient d'un CDN : en LAN sans internet il n'est pas là. Pas de graphe, donc —
+  // mais sans ce garde `new Chart()` levait ici, AVANT le rendu des tableaux et l'ouverture
+  // du WebSocket : il ne restait que quatre tuiles figées.
+  if (typeof Chart === 'undefined') return;
   const { points, withGroups } = selectedSeries();
   buildChart(points, lastTotal, capacity, withGroups ? lastGroups : []);
 }
@@ -567,7 +657,9 @@ async function setRange(h, btn) {
   document.querySelectorAll('#range-btns button').forEach(b => b.classList.toggle('active', b === btn));
   try {
     const d = await fetchHistory();
+    if (!d) return; // un autre clic a pris le relais : c'est lui qui redessinera
     applyHistory(d);
+    applyGroupStats(d);
     document.getElementById('s-in').textContent = totalIn;
     document.getElementById('s-peak').textContent = peak;
   } catch {}
@@ -611,13 +703,15 @@ function connectWS(eventId) {
     if (msg.type === 'pong') return;
     if (msg.type === 'init') {
       updateCount(msg.total);
+      lastTotal = msg.total; // tout de suite : la lecture ci-dessous peut être remplacée par une autre
+      if (msg.groups) lastGroups = msg.groups;
       fetchHistory()
         .then(d => {
-          if (currentEvent !== eventId) return;
+          if (!d || currentEvent !== eventId) return;
           applyHistory(d);
+          applyGroupStats(d); // (re)connexion : des `update` ont pu être manqués
           document.getElementById('s-in').textContent = totalIn;
           document.getElementById('s-peak').textContent = peak;
-          lastTotal = msg.total;
           renderChart();
         })
         .catch(() => {});
@@ -630,17 +724,9 @@ function connectWS(eventId) {
       lastTotal = msg.total;
       if (msg.groups) lastGroups = msg.groups;
       updateLivePoint();
-      if (msg.groups) {
-        const tbody = document.getElementById('grp-body');
-        if (tbody.children.length > 0) {
-          msg.groups.forEach((g, i) => {
-            const row = tbody.children[i];
-            if (row) row.children[1].textContent = g.count;
-          });
-          const foot = document.getElementById('grp-foot');
-          if (foot.children[0]) foot.children[0].children[1].textContent = msg.total;
-        }
-      }
+      // Count des groupes tout de suite (WS) ; entrées/sorties et opérateurs dans la foulée.
+      if (msg.groups) renderGroups(liveGroups());
+      scheduleLiveStats();
       if (msg.capacity !== undefined) {
         capacity = msg.capacity;
         document.getElementById('s-cap').textContent = capacity;
@@ -672,8 +758,10 @@ setInterval(() => {
   if (!currentEvent || document.hidden) return;
   fetchHistory()
     .then(d => {
+      if (!d) return;
       // Resync du cumul : le +delta optimiste du WS peut dériver (bornage au 0 du total).
       applyHistory(d);
+      applyGroupStats(d);
       document.getElementById('s-in').textContent = totalIn;
       document.getElementById('s-peak').textContent = peak;
       if (!statsWs || statsWs.readyState !== 1) lastTotal = d.total; // pas de WS → total du fetch

@@ -101,7 +101,7 @@ export class RegistryDO extends DurableObject {
       const evt = this._events[id];
       if (evt) {
         if (typeof name === 'string' && name.trim()) evt.name = name.trim().slice(0, 40);
-        if (Number.isFinite(capacity) && capacity > 0) evt.capacity = Math.round(capacity);
+        if (Number.isFinite(capacity) && capacity > 0) evt.capacity = Math.max(1, Math.round(capacity));
         if (archived === true)  evt.archived = true;
         if (archived === false) evt.archived = false;
         await this.ctx.storage.put('events', this._events);

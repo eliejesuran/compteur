@@ -168,6 +168,10 @@ async function handleAPI(request, env, url, path, ctx) {
       try {
         // N10 : timeout par DO → un DO lent ne bloque pas toute la liste admin.
         const r   = await eventStub(env, m.id).fetch(iReq('/summary'), { signal: AbortSignal.timeout(3000) });
+        // DO sans état (création interrompue, désynchronisation) : /summary répond 404 EN
+        // JSON — sans ce garde le `catch` ci-dessous n'était pas atteint et l'événement
+        // partait sans `groups`, sur quoi la page admin plantait (`groups.map`).
+        if (!r.ok) throw new Error(`summary ${r.status}`);
         const { total, groups, name } = await r.json();
         // Le DO est la SOURCE DE VÉRITÉ du nom ; le registre n'est qu'un index. S'ils
         // divergent (entrées corrompues par l'ancien bug de renommage de groupe), on
@@ -203,9 +207,17 @@ async function handleAPI(request, env, url, path, ctx) {
     const regRes = await registryStub(env).fetch(iReq('/events', 'POST', { id, name }));
     if (!regRes.ok) return Response.json(await regRes.json(), { status: regRes.status });
 
-    const r = await eventStub(env, id).fetch(iReq('/init', 'POST', { id, name, capacity: 100 }));
-    const data = await r.json();
-    return Response.json(data);
+    // Si le DO ne s'initialise pas, l'entrée du registre est RETIRÉE : sinon elle reste
+    // listée à vie (ni archivable — /config répond 404 — ni supprimable depuis la page)
+    // et compte dans le plafond de 50.
+    try {
+      const r = await eventStub(env, id).fetch(iReq('/init', 'POST', { id, name, capacity: 100 }));
+      if (!r.ok) throw new Error(`init ${r.status}`);
+      return Response.json(await r.json());
+    } catch {
+      await registryStub(env).fetch(iReq('/events/delete', 'POST', { id }));
+      return Response.json({ error: 'Création impossible pour l\'instant — réessayez.' }, { status: 502 });
+    }
   }
 
   if (path === '/api/groups' && method === 'POST') {

@@ -380,6 +380,33 @@ describe('GET /api/history — since / series / peak', () => {
     const res = await request(server).get(`/api/history?code=admin123&e=${EVT_ID}`);
     assert.equal(res.body.peak, 77);
   });
+
+  // stats.html relit ainsi les chiffres par groupe / par opérateur à chaque clic (au plus
+  // 1 fois par seconde) : la réponse doit être minuscule côté courbe ET complète pour le reste.
+  test('relecture minimale (series=fine, since=maintenant) : aucun point, stats complètes', async () => {
+    evt().history       = [H(0, 1000, 1), H(1, 9000, 3)];
+    evt().historyCoarse = [{ t: 1000, c: 1 }];
+    const clic = (delta, name) => request(server).post('/api/count')
+      .send({ delta, uuid: randomUUID(), e: EVT_ID, g: GRP_ID, name });
+    await clic(5, 'Alice');
+    await clic(-1, 'Bob');
+
+    const res = await request(server)
+      .get(`/api/history?code=admin123&e=${EVT_ID}&series=fine&since=${Date.now()}`);
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body.history, []);
+    assert.deepEqual(res.body.historyCoarse, []);
+    assert.deepEqual(
+      { total: res.body.total, totalIn: res.body.totalIn, totalOut: res.body.totalOut },
+      { total: 4, totalIn: 5, totalOut: 1 },
+    );
+    const g = res.body.groups.find(x => x.id === GRP_ID);
+    assert.deepEqual(
+      { count: g.count, totalIn: g.totalIn, totalOut: g.totalOut },
+      { count: 4, totalIn: 5, totalOut: 1 },
+    );
+    assert.deepEqual(g.opStats, { Alice: { in: 5, out: 0 }, Bob: { in: 0, out: 1 } });
+  });
 });
 
 describe('GET /api/history', () => {
@@ -643,6 +670,29 @@ describe('WebSocket', () => {
       });
       request(server).post('/api/count')
         .send({ delta: 1, uuid: randomUUID(), e: EVT_ID, g: GRP_ID })
+        .end(() => {});
+    });
+    ws.on('error', done);
+  });
+
+  // Le WS n'est PAS authentifié (S5) : quiconque connaît l'id de l'événement le lit. Les
+  // chiffres par opérateur, eux, sont derrière le code (/api/history). stats.html les relit
+  // donc par HTTP à chaque `update` — ne jamais les « optimiser » en les poussant ici.
+  // Clés figées exprès : tout nouveau champ doit être pesé pour un canal ouvert.
+  test('update ne transporte aucun chiffre par opérateur (canal non authentifié)', { timeout: 3000 }, (t, done) => {
+    const ws = new WebSocket(wsUrl());
+    t.after(() => ws.close());
+    ws.once('message', () => {
+      ws.once('message', (data) => {
+        const msg = JSON.parse(data);
+        assert.equal(msg.type, 'update');
+        assert.deepEqual(Object.keys(msg).sort(), ['alert', 'capacity', 'delta', 'groups', 'total', 'type']);
+        for (const g of msg.groups) assert.deepEqual(Object.keys(g).sort(), ['count', 'id', 'name']);
+        assert.ok(!String(data).includes('Alice'), 'le prénom de l\'opérateur ne doit pas figurer dans update');
+        done();
+      });
+      request(server).post('/api/count')
+        .send({ delta: 1, uuid: randomUUID(), e: EVT_ID, g: GRP_ID, name: 'Alice' })
         .end(() => {});
     });
     ws.on('error', done);

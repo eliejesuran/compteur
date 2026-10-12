@@ -15,6 +15,10 @@ const STATE_FILE = process.env.STATE_FILE || path.join(__dirname, 'state.json');
 const MAX_EVENTS = 50;   // événements au total (archivés inclus)
 const MAX_GROUPS = 20;   // groupes par événement
 const MAX_OPS    = 100;  // opérateurs distincts (opStats) par groupe
+// uuid d'une op : 36 car. (crypto.randomUUID) ou ~40 (repli N6). Les uuid sont gardés en
+// mémoire (20 000) et sur disque (5 000/event) : sans borne, quelques milliers d'envois de
+// 100 ko suffisaient à faire de state.json un fichier de 500 Mo réécrit à chaque comptage.
+const MAX_UUID_LEN = 64; // — aligné local/cloud
 // Historique FIN : 1 point / 30 s, plafond 4320 pts = 36 h de détail.
 // 30 s (et non 60 s) : besoin métier = sortir un événement de 24 h point par point
 // toutes les 30 s. 4320 et non 2880 (= pile 24 h) car un event NON ARCHIVÉ continue
@@ -66,6 +70,15 @@ const rlBuckets          = new Map(); // S3: ip → {tokens, lastMs} (token buck
 
 // --- Helpers ---
 
+// Lecture d'une clé FOURNIE PAR UN CLIENT (id d'événement, id de groupe, prénom) : jamais
+// `obj[cle]` nu. « __proto__ », « constructor », « toString »… y trouvent une propriété
+// HÉRITÉE d'Object.prototype au lieu de rien : 500, écriture sur Object.prototype, voire
+// arrêt du serveur (cf. wss.on('connection')). Une clé non textuelle (tableau, nombre) ne
+// désigne rien non plus — elle serait convertie en chaîne par l'accès direct.
+function own(obj, key) {
+  return (typeof key === 'string' && Object.hasOwn(obj, key)) ? obj[key] : undefined;
+}
+
 function makeGroup(id, name) {
   return { id, name, count: 0, totalIn: 0, totalOut: 0, opStats: {} };
 }
@@ -89,6 +102,30 @@ function eventTotal(evt) {
 
 function groupSummary(evt) {
   return Object.values(evt.groups).map(g => ({ id: g.id, name: g.name, count: g.count }));
+}
+
+function groupNameOf(evt, groupId) {
+  return (evt && groupId) ? (own(evt.groups, groupId)?.name ?? null) : null;
+}
+
+// Le TOTAL d'un événement n'est jamais négatif — un GROUPE, si : une porte de sortie
+// compte en négatif ce qu'une porte d'entrée a compté en positif (décision Elie, 2026-10-12).
+// Le comptage le garantit déjà (bornage). Ce qui pouvait le casser : retirer la part d'un
+// groupe d'entrée alors qu'un groupe de sortie est négatif (suppression ou remise à zéro
+// d'UN groupe). On remonte alors les groupes négatifs — le plus négatif d'abord — jusqu'à
+// ce que le total vaille 0. Les cumuls (totalIn/out) ne bougent pas : personne n'est passé.
+// Renvoie true si un compteur a été corrigé.
+function floorTotalAtZero(evt) {
+  let deficit = -eventTotal(evt);
+  if (deficit <= 0) return false;
+  const negatives = Object.values(evt.groups).filter(g => g.count < 0).sort((a, b) => a.count - b.count);
+  for (const grp of negatives) {
+    const up = Math.min(deficit, -grp.count);
+    grp.count += up;
+    deficit -= up;
+    if (deficit === 0) break;
+  }
+  return true;
 }
 
 // Cumuls entrées/sorties de l'événement. Stockés dans CHAQUE point d'historique (i/o)
@@ -275,7 +312,7 @@ function scheduleSave() {
 // --- Broadcast ---
 
 function broadcastEvent(eventId, delta) {
-  const evt = state.events[eventId];
+  const evt = own(state.events, eventId);
   if (!evt) return;
   const total = eventTotal(evt);
   const msg = JSON.stringify({
@@ -292,7 +329,7 @@ function broadcastEvent(eventId, delta) {
 }
 
 function broadcastClientsForEvent(eventId) {
-  const evt = state.events[eventId];
+  const evt = own(state.events, eventId);
   const now = Date.now();
   const seen = new Set();
   const clients = [];
@@ -305,14 +342,14 @@ function broadcastClientsForEvent(eventId) {
   for (const c of wsClients.values()) {
     if (c.eventId !== eventId || !c.name || seen.has(c.name)) continue;
     seen.add(c.name);
-    clients.push({ name: c.name, groupName: c.groupId ? evt?.groups[c.groupId]?.name ?? null : null });
+    clients.push({ name: c.name, groupName: groupNameOf(evt, c.groupId) });
   }
 
   // U4: recently disconnected (grace period 30s)
   for (const v of recentlyDisconnected.values()) {
     if (v.eventId !== eventId || seen.has(v.name)) continue;
     seen.add(v.name);
-    clients.push({ name: v.name, groupName: v.groupId ? evt?.groups[v.groupId]?.name ?? null : null });
+    clients.push({ name: v.name, groupName: groupNameOf(evt, v.groupId) });
   }
 
   const msg = JSON.stringify({ type: 'clients', clients });
@@ -337,13 +374,13 @@ app.post('/api/count', (req, res) => {
   if (!rlCheck(ip)) return res.status(429).set('Retry-After', '1').json({ error: 'rate limited' });
 
   const { delta, uuid, name, e, g } = req.body ?? {};
-  if (typeof uuid !== 'string' || !uuid) return res.status(400).json({ error: 'uuid required' });
+  if (typeof uuid !== 'string' || !uuid || uuid.length > MAX_UUID_LEN) return res.status(400).json({ error: 'uuid required' });
   if (![-5, -1, 1, 5].includes(delta)) return res.status(400).json({ error: 'invalid delta' });
   if (!e || !g) return res.status(400).json({ error: 'e and g required' });
 
-  const evt = state.events[e];
+  const evt = own(state.events, e);
   if (!evt || evt.archived) return res.status(404).json({ error: 'event not found' });
-  const grp = evt.groups[g];
+  const grp = own(evt.groups, g);
   if (!grp) return res.status(404).json({ error: 'group not found' });
 
   const seenOps = ensureSeenOps(e);
@@ -354,6 +391,9 @@ app.post('/api/count', (req, res) => {
 
   // Un groupe peut devenir négatif (entrée par un groupe, sortie par un autre) ;
   // seul le TOTAL de l'event est borné à 0. `eff` = delta effectivement appliqué.
+  // La formule suppose cur ≥ 0 : avec un total négatif (état d'avant floorTotalAtZero),
+  // un « −1 » appliquait +|cur| et l'inscrivait en ENTRÉES. On s'en assure donc d'abord.
+  floorTotalAtZero(evt);
   const cur = eventTotal(evt);
   const eff = (cur + delta < 0) ? -cur : delta;
   grp.count += eff;
@@ -364,10 +404,13 @@ app.post('/api/count', (req, res) => {
     const n = name.trim().slice(0, 32);
     // R4/L2 : un nouveau nom au-delà de MAX_OPS n'est plus tracké (opStats),
     // mais le comptage total/groupe reste intact — jamais de perte de compte.
-    if (n && (grp.opStats[n] || Object.keys(grp.opStats).length < MAX_OPS)) {
-      if (!grp.opStats[n]) grp.opStats[n] = { in: 0, out: 0 };
-      if (eff > 0) grp.opStats[n].in += eff;
-      else grp.opStats[n].out += -eff;
+    // Le prénom est une clé d'objet : `own()` pour « constructor », « toString »… (sinon
+    // jamais suivis) ; « __proto__ » ne peut pas être une clé ordinaire → pas suivi.
+    let stat = own(grp.opStats, n);
+    if (n && n !== '__proto__' && (stat || Object.keys(grp.opStats).length < MAX_OPS)) {
+      if (!stat) stat = grp.opStats[n] = { in: 0, out: 0 };
+      if (eff > 0) stat.in += eff;
+      else stat.out += -eff;
     }
   }
 
@@ -381,9 +424,9 @@ app.post('/api/count', (req, res) => {
 app.get('/api/state', (req, res) => {
   const { e, g } = req.query;
   if (!e || !g) return res.status(400).json({ error: 'e and g required' });
-  const evt = state.events[e];
+  const evt = own(state.events, e);
   if (!evt || evt.archived) return res.status(404).json({ error: 'event not found' });
-  const grp = evt.groups[g];
+  const grp = own(evt.groups, g);
   if (!grp) return res.status(404).json({ error: 'group not found' });
   res.json({
     total: eventTotal(evt),
@@ -435,6 +478,9 @@ app.post('/api/events', (req, res) => {
   state.events[id] = makeEvent(id, name);
   ensureSeenOps(id);
   const evt = state.events[id];
+  // Sans ça rien n'était écrit avant le premier comptage ou la sauvegarde périodique
+  // (30 s) : un redémarrage dans l'intervalle, et le QR déjà distribué était mort.
+  scheduleSave();
   res.json({ id, name: evt.name, total: 0, capacity: evt.capacity, groups: groupSummary(evt) });
 });
 
@@ -442,7 +488,7 @@ app.post('/api/events', (req, res) => {
 app.post('/api/groups', (req, res) => {
   const { code, e, name } = req.body ?? {};
   if (!checkAdmin(code)) return res.status(403).json({ error: 'forbidden' });
-  const evt = state.events[e];
+  const evt = own(state.events, e);
   if (!evt) return res.status(404).json({ error: 'event not found' });
   // R4/L1 : plafond du nombre de groupes par événement
   if (Object.keys(evt.groups).length >= MAX_GROUPS) {
@@ -452,6 +498,7 @@ app.post('/api/groups', (req, res) => {
   const groupName = (typeof name === 'string' ? name.trim() : '').slice(0, 40) || 'Nouveau groupe';
   evt.groups[id] = makeGroup(id, groupName);
   broadcastEvent(e, 0); // Notify admin of new group
+  scheduleSave(); // comme la création d'événement : le QR du groupe doit survivre à un redémarrage
   res.json({ id, name: groupName });
 });
 
@@ -460,7 +507,7 @@ app.post('/api/groups', (req, res) => {
 // celle dont le client n'a pas besoin. Sans paramètre : tout, comme avant (export XLSX).
 app.get('/api/history', (req, res) => {
   if (!checkAuth(req.query.code)) return res.status(403).json({ error: 'forbidden' });
-  const evt = state.events[req.query.e];
+  const evt = own(state.events, req.query.e);
   if (!evt) return res.status(404).json({ error: 'event not found' });
   if (backfillCoarse(evt)) scheduleSave(); // reconstruit la série grossière si absente
   const totalIn  = Object.values(evt.groups).reduce((s, g) => s + g.totalIn, 0);
@@ -491,7 +538,7 @@ app.post('/api/admin/config', (req, res) => {
     state.permCode = (typeof newPermCode === 'string' && newPermCode.length >= 4) ? newPermCode : null;
   }
 
-  const evt = state.events[e];
+  const evt = own(state.events, e);
   if (evt) {
     if (deleteEvent === true) {
       delete state.events[e];
@@ -505,7 +552,7 @@ app.post('/api/admin/config', (req, res) => {
     }
     if (g) {
       // Group-level
-      const grp = evt.groups[g];
+      const grp = own(evt.groups, g);
       if (grp) {
         if (typeof name === 'string' && name.trim()) grp.name = name.trim().slice(0, 40);
         if (deleteGroup === true) {
@@ -527,11 +574,15 @@ app.post('/api/admin/config', (req, res) => {
         if (reset === true) {
           grp.count = 0; grp.totalIn = 0; grp.totalOut = 0; grp.opStats = {};
         }
+        // Suppression ou remise à zéro d'UN groupe : sa part quitte le total, qui ne doit
+        // pas passer sous 0 pour autant (cf. floorTotalAtZero).
+        floorTotalAtZero(evt);
       }
       broadcastEvent(e, 0);
     } else {
       // Event-level
-      if (Number.isFinite(capacity) && capacity > 0) evt.capacity = Math.round(capacity);
+      // max(1, …) : 0,4 passait le test `> 0` puis s'arrondissait à 0 → alerte permanente.
+      if (Number.isFinite(capacity) && capacity > 0) evt.capacity = Math.max(1, Math.round(capacity));
       if (typeof name === 'string' && name.trim()) evt.name = name.trim().slice(0, 40);
       if (archived === true) {
         evt.archived = true;
@@ -566,7 +617,7 @@ app.post('/api/admin/config', (req, res) => {
 app.post('/api/reset-counts', (req, res) => {
   const { code, e } = req.body ?? {};
   if (!checkAuth(code)) return res.status(403).json({ error: 'forbidden' });
-  const evt = state.events[e];
+  const evt = own(state.events, e);
   if (!evt || evt.archived) return res.status(404).json({ error: 'event not found' });
   for (const grp of Object.values(evt.groups)) grp.count = 0;
   evt.history.push(historyPoint(evt)); // marque la remise à zéro dans l'historique fin
@@ -585,17 +636,29 @@ app.get('/api/qr', async (req, res) => {
   if (!checkAuth(req.query.code)) return res.status(403).json({ error: 'forbidden' });
   const { e, g } = req.query;
   if (!e || !g) return res.status(400).json({ error: 'e and g required' });
+  // Comme le Worker : pas de QR pour un événement ou un groupe qui n'existe pas.
+  const evt = own(state.events, e);
+  if (!evt || evt.archived) return res.status(404).json({ error: 'event not found' });
+  if (!own(evt.groups, g)) return res.status(404).json({ error: 'group not found' });
   const host = req.headers.host;
   const proto = req.headers['x-forwarded-proto'] || (req.socket.encrypted ? 'https' : 'http');
   const url = `${proto}://${host}/?e=${e}&g=${g}`;
-  const qr = await QRCode.toDataURL(url, { width: 400, margin: 2 });
-  res.json({ qr, url });
+  // R3 : handler async — Express 4 ne rattrape pas un rejet, et depuis Node 15 un rejet non
+  // géré ARRÊTE le processus. QRCode rejette dès que l'URL ne tient pas dans un QR code
+  // (en-tête Host démesuré) : une requête, avec le seul code PERM, faisait tomber le serveur.
+  try {
+    const qr = await QRCode.toDataURL(url, { width: 400, margin: 2 });
+    res.json({ qr, url });
+  } catch (err) {
+    console.error('[qr]', err.message);
+    res.status(500).json({ error: 'qr failed' });
+  }
 });
 
 // Connected operators for an event (with group names) — admin or perm
 app.get('/api/clients', (req, res) => {
   if (!checkAuth(req.query.code)) return res.status(403).json({ error: 'forbidden' });
-  const evt = state.events[req.query.e];
+  const evt = own(state.events, req.query.e);
   if (!evt) return res.status(404).json({ error: 'event not found' });
   const now = Date.now();
   const seen = new Set();
@@ -603,13 +666,13 @@ app.get('/api/clients', (req, res) => {
   for (const c of wsClients.values()) {
     if (c.eventId !== req.query.e || !c.name || seen.has(c.name)) continue;
     seen.add(c.name);
-    clients.push({ name: c.name, groupName: c.groupId ? evt.groups[c.groupId]?.name ?? null : null, connectedAt: c.connectedAt });
+    clients.push({ name: c.name, groupName: groupNameOf(evt, c.groupId), connectedAt: c.connectedAt });
   }
   // U4: recently disconnected (grace period 30s)
   for (const v of recentlyDisconnected.values()) {
     if (v.eventId !== req.query.e || seen.has(v.name) || now - v.disconnectedAt > 30_000) continue;
     seen.add(v.name);
-    clients.push({ name: v.name, groupName: v.groupId ? evt.groups[v.groupId]?.name ?? null : null, connectedAt: null });
+    clients.push({ name: v.name, groupName: groupNameOf(evt, v.groupId), connectedAt: null });
   }
   res.json({ clients });
 });
@@ -622,15 +685,29 @@ app.get('/api/ips', (req, res) => {
 
 // --- WebSocket ---
 
+// RIEN ne doit lever dans ces handlers : une exception y remonte en uncaughtException et
+// ARRÊTE le serveur, alors que le WebSocket n'est pas authentifié. `?e=__proto__` (objet
+// hérité, sans `groups`) ou une URL d'upgrade invalide (`GET //[`) suffisaient : une seule
+// requête depuis n'importe quel appareil du réseau.
 wss.on('connection', (ws, req) => {
+  try {
+    onConnection(ws, req);
+  } catch (err) {
+    console.error('[ws] connexion refusée :', err.message);
+    wsClients.delete(ws);
+    try { ws.close(1011, 'Internal error'); } catch {}
+  }
+});
+
+function onConnection(ws, req) {
   const params = new URL(req.url, 'http://localhost').searchParams;
   const eventId = params.get('e');
   const groupId = params.get('g'); // null = admin connection (no group)
 
   if (!eventId) { ws.close(4004, 'Event required'); return; }
-  const evt = state.events[eventId];
+  const evt = own(state.events, eventId);
   if (!evt || evt.archived) { ws.close(4004, 'Event not found'); return; }
-  if (groupId && !evt.groups[groupId]) { ws.close(4004, 'Group not found'); return; }
+  if (groupId && !own(evt.groups, groupId)) { ws.close(4004, 'Group not found'); return; }
 
   wsClients.set(ws, { name: null, connectedAt: Date.now(), eventId, groupId });
 
@@ -653,7 +730,7 @@ wss.on('connection', (ws, req) => {
   for (const c of wsClients.values()) {
     if (c.eventId !== eventId || !c.name || seen.has(c.name)) continue;
     seen.add(c.name);
-    currentClients.push({ name: c.name, groupName: c.groupId ? evt.groups[c.groupId]?.name ?? null : null });
+    currentClients.push({ name: c.name, groupName: groupNameOf(evt, c.groupId) });
   }
   if (currentClients.length > 0) {
     ws.send(JSON.stringify({ type: 'clients', clients: currentClients }));
@@ -681,29 +758,36 @@ wss.on('connection', (ws, req) => {
   });
 
   ws.on('close', () => {
-    const client = wsClients.get(ws);
-    wsClients.delete(ws);
-    if (client?.name) {
-      logClients('déconnecté(e)', client.name, client.eventId, client.groupId);
-      // U4: grâce déco — garde l'op dans la liste pendant 30s
-      const key = `${client.eventId}:${client.name}`;
-      const disconnectedAt = Date.now();
-      recentlyDisconnected.set(key, {
-        name: client.name, groupId: client.groupId, eventId: client.eventId, disconnectedAt,
-      });
-      broadcastClientsForEvent(client.eventId);
-      setTimeout(() => {
-        const entry = recentlyDisconnected.get(key);
-        if (entry && entry.disconnectedAt === disconnectedAt) {
-          recentlyDisconnected.delete(key);
-          broadcastClientsForEvent(client.eventId);
-        }
-      }, 30_000);
-    }
+    try {
+      const client = wsClients.get(ws);
+      wsClients.delete(ws);
+      if (client?.name) {
+        logClients('déconnecté(e)', client.name, client.eventId, client.groupId);
+        // U4: grâce déco — garde l'op dans la liste pendant 30s
+        const key = `${client.eventId}:${client.name}`;
+        const disconnectedAt = Date.now();
+        recentlyDisconnected.set(key, {
+          name: client.name, groupId: client.groupId, eventId: client.eventId, disconnectedAt,
+        });
+        broadcastClientsForEvent(client.eventId);
+        // unref() : cette minuterie ne doit pas retenir le processus à elle seule (le
+        // serveur, lui, vit par son port d'écoute). Sans ça, `npm run test:local`
+        // attendait 30 s en fin de course que la dernière période de grâce expire.
+        setTimeout(() => {
+          try {
+            const entry = recentlyDisconnected.get(key);
+            if (entry && entry.disconnectedAt === disconnectedAt) {
+              recentlyDisconnected.delete(key);
+              broadcastClientsForEvent(client.eventId);
+            }
+          } catch (err) { console.error('[ws] fin de grâce :', err.message); }
+        }, 30_000).unref();
+      }
+    } catch (err) { console.error('[ws] fermeture :', err.message); }
   });
 
   ws.on('error', () => {});
-});
+}
 
 // --- Start ---
 const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -736,6 +820,13 @@ if (require.main === module) {
 
   // Sauvegarde de secours toutes les 30s (scheduleSave après chaque count couvre le cas normal)
   setInterval(flushSave, 30000);
+
+  // Arrêt demandé (Ctrl+C, kill, terminal fermé) : l'écriture est différée de 500 ms après
+  // chaque comptage. Sans ça le dernier clic — déjà acquitté, donc sorti de la file du
+  // téléphone — n'était pas encore sur le disque quand le processus s'en allait.
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+    process.on(signal, () => { flushSave(); process.exit(0); });
+  }
 
   // Record history (total + détail par groupe) every 60s → 2880 pts = 48h de détail
   setInterval(recordHistory, FINE_INTERVAL_MS);

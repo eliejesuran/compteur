@@ -519,6 +519,61 @@ describe('GET /api/history — since / series / peak', () => {
 
 // ── Garde d'entrée du Worker : ids invalides + bucket global (S4bis / L3bis) ──
 
+// ── Stats par groupe / par opérateur en direct ───────────────────────────────
+
+describe('Stats opérateurs en direct (stats.html)', () => {
+  // stats.html relit ainsi les chiffres par groupe / par opérateur à chaque clic (au plus
+  // 1 fois par seconde) : la réponse doit être minuscule côté courbe ET complète pour le reste.
+  it('relecture minimale de /api/history : aucun point, groupes / opStats / cumuls complets', async () => {
+    const { id: e, groups } = await createEvent('Direct');
+    const g = groups[0].id;
+    await count(e, g, 5, 'direct-1', 'Alice');
+    await count(e, g, -1, 'direct-2', 'Bob');
+    const stub = env.EVENT.get(env.EVENT.idFromName(e));
+    await runInDurableObject(stub, (inst) => inst.alarm()); // un point d'historique existe
+
+    const q = new URLSearchParams({ code: ADMIN, e, series: 'fine', since: String(Date.now() + 1) });
+    const d = await (await SELF.fetch(`${BASE}/api/history?${q}`)).json();
+    expect(d.history).toEqual([]);
+    expect(d.historyCoarse).toEqual([]);
+    expect({ total: d.total, totalIn: d.totalIn, totalOut: d.totalOut }).toEqual({ total: 4, totalIn: 5, totalOut: 1 });
+    expect(d.groups).toHaveLength(1);
+    expect({ count: d.groups[0].count, totalIn: d.groups[0].totalIn, totalOut: d.groups[0].totalOut })
+      .toEqual({ count: 4, totalIn: 5, totalOut: 1 });
+    expect(d.groups[0].opStats).toEqual({ Alice: { in: 5, out: 0 }, Bob: { in: 0, out: 1 } });
+
+    await SELF.fetch(`${BASE}/api/admin/config`, J({ code: ADMIN, e, deleteEvent: true }));
+  });
+
+  // Le WS n'est PAS authentifié (S5) : quiconque connaît l'id de l'événement le lit. Les
+  // chiffres par opérateur, eux, sont derrière le code (/api/history) — ne jamais les
+  // « optimiser » en les poussant sur ce canal. Clés figées exprès.
+  it('le WS update ne transporte aucun chiffre par opérateur (canal non authentifié)', async () => {
+    const { id: e, groups } = await createEvent('Confidentiel');
+    const g = groups[0].id;
+    const r = await SELF.fetch(`${BASE}/?e=${e}`, { headers: { Upgrade: 'websocket' } });
+    expect(r.status).toBe(101);
+    const ws = r.webSocket;
+    const update = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('aucun message update reçu')), 3000);
+      ws.addEventListener('message', (ev) => {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'update') { clearTimeout(timer); resolve({ msg, raw: String(ev.data) }); }
+      });
+    });
+    ws.accept();
+
+    await count(e, g, 1, 'conf-1', 'Alice');
+    const { msg, raw } = await update;
+    expect(Object.keys(msg).sort()).toEqual(['alert', 'capacity', 'delta', 'groups', 'total', 'type']);
+    for (const grp of msg.groups) expect(Object.keys(grp).sort()).toEqual(['count', 'id', 'name']);
+    expect(raw).not.toContain('Alice');
+
+    ws.close();
+    await SELF.fetch(`${BASE}/api/admin/config`, J({ code: ADMIN, e, deleteEvent: true }));
+  });
+});
+
 describe('Garde d\'entrée du Worker', () => {
   it('rejette les ids non hexadécimaux sans réveiller de DO, laisse passer les valides', async () => {
     for (const bad of ['../etc', 'ZZZZZZ', 'a'.repeat(64), '<script>', '']) {
@@ -550,17 +605,25 @@ describe('Garde d\'entrée du Worker', () => {
 
   it('/api/count consulte ce bucket AVANT de réveiller le DO', async () => {
     const ip = '203.0.113.8';
-    for (let i = 0; i < 800; i++) wrlCheck(ip); // bucket vidé pour cette IP
+    // Horloge FIGÉE le temps du test : le bucket se recharge à 40 jetons/s, donc 25 ms entre
+    // le vidage et la requête suffisent à rendre un jeton — la requête passe alors et répond
+    // 404 au lieu de 429. Sur une machine chargée (les fichiers de test tournent en
+    // parallèle), SELF.fetch met plus que ça : le test échouait une fois sur deux.
+    const maintenant = Date.now(), vraieHorloge = Date.now;
+    Date.now = () => maintenant;
+    try {
+      for (let i = 0; i < 800; i++) wrlCheck(ip); // bucket vidé pour cette IP
 
-    // event volontairement inconnu : sans le bucket Worker, la requête réveillait un DO
-    // (facturé, bucket neuf) pour répondre 404. Ici elle est arrêtée en amont.
-    const r = await SELF.fetch(`${BASE}/api/count`, {
-      method: 'POST',
-      headers: { 'cf-connecting-ip': ip, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ e: 'ffffff', g: 'abc123', delta: 1, uuid: 'rl1' }),
-    });
-    expect(r.status).toBe(429);
-    expect(r.headers.get('Retry-After')).toBe('1');
+      // event volontairement inconnu : sans le bucket Worker, la requête réveillait un DO
+      // (facturé, bucket neuf) pour répondre 404. Ici elle est arrêtée en amont.
+      const r = await SELF.fetch(`${BASE}/api/count`, {
+        method: 'POST',
+        headers: { 'cf-connecting-ip': ip, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ e: 'ffffff', g: 'abc123', delta: 1, uuid: 'rl1' }),
+      });
+      expect(r.status).toBe(429);
+      expect(r.headers.get('Retry-After')).toBe('1');
+    } finally { Date.now = vraieHorloge; }
   });
 });
 

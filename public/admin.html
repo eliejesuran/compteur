@@ -952,7 +952,12 @@ async function deleteArchivedEvent() {
 // fenêtre fine (48h) alors que la série longue couvre 60 jours : d'abord le long terme
 // (5 min, total seul) jusqu'au premier point détaillé, puis le détaillé (1 min).
 async function exportXLSX() {
-  if (!currentEvent || typeof XLSX === 'undefined') return;
+  if (!currentEvent) return;
+  // SheetJS vient d'un CDN : sans internet (LAN) ou CDN bloqué, le bouton ne faisait RIEN.
+  if (typeof XLSX === 'undefined') {
+    alert('Export impossible : la bibliothèque XLSX n\'a pas pu être chargée (pas d\'accès à internet ?).');
+    return;
+  }
   try {
     const data = await fetchT(`/api/history?${qs({ code: adminCode, e: currentEvent })}`).then(r => r.json());
     const evt  = events.find(e => e.id === currentEvent);
