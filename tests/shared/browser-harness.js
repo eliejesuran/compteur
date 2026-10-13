@@ -10,6 +10,8 @@
 //                                           vrai fetch : faire `await stabiliser()` avant de
 //                                           changer la réponse, sinon elle vaut aussi pour
 //                                           la requête déjà partie)
+//   page.reseau.sourd = true                le navigateur n'honore pas abort()
+//   corpsQuiCale()                          réponse dont les en-têtes arrivent, jamais le corps
 //   page.sockets                            les WebSocket ouverts par la page
 //   await page.avancer(ms)                  fait passer le temps (setTimeout / setInterval)
 //   page.lire('queue.length')               évalue une expression dans la page
@@ -135,6 +137,10 @@ function reponse(status, corps, { brut } = {}) {
 }
 const HORS_LIGNE = () => { throw new TypeError('Failed to fetch'); };
 const PEND = () => new Promise(() => {}); // la requête ne revient jamais
+// Les en-têtes arrivent, le corps jamais (réseau qui tombe ou sature en cours de réponse).
+function corpsQuiCale(status = 200) {
+  return { ...reponse(status, null), json: PEND, text: PEND };
+}
 
 // Promesse résolue à la main : pour répondre à une requête au moment choisi par le test.
 function differe() {
@@ -171,8 +177,9 @@ function charger(fichier, marqueur, opts = {}) {
   const elements = new Map();
   const journal = { vibrations: [], bips: 0, navigations: [], alertes: [], confirmations: [], partages: [], copies: [], swEnregistres: [], historique: [] };
 
-  // Réseau
-  const reseau = { appels: [], repondre };
+  // Réseau. `sourd` : le navigateur n'honore pas abort() — la requête abandonnée par la
+  // page ne se termine pas pour autant (le pire cas : seule une minuterie de la page libère).
+  const reseau = { appels: [], repondre, sourd: false };
   const fetchSimule = (cible, init = {}) => {
     const appel = {
       url: String(cible),
@@ -186,7 +193,7 @@ function charger(fichier, marqueur, opts = {}) {
     return new Promise((resolve, reject) => {
       const abandon = () => reject(Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }));
       if (init.signal?.aborted) return abandon();
-      init.signal?.addEventListener('abort', abandon);
+      init.signal?.addEventListener('abort', () => { if (!reseau.sourd) abandon(); });
       Promise.resolve().then(() => reseau.repondre(appel)).then(resolve, reject);
     });
   };
@@ -327,4 +334,4 @@ function charger(fichier, marqueur, opts = {}) {
   return page;
 }
 
-module.exports = { charger, lirePage, extraireScript, reponse, differe, stabiliser, tour, HORS_LIGNE, PEND };
+module.exports = { charger, lirePage, extraireScript, reponse, corpsQuiCale, differe, stabiliser, tour, HORS_LIGNE, PEND };

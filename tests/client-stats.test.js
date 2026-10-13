@@ -14,7 +14,7 @@ const assert = require('node:assert/strict');
 const fs   = require('node:fs');
 const os   = require('node:os');
 const path = require('node:path');
-const { charger, reponse, differe, stabiliser, HORS_LIGNE } = require('./shared/browser-harness');
+const { charger, reponse, corpsQuiCale, differe, stabiliser, HORS_LIGNE, PEND } = require('./shared/browser-harness');
 
 // Constantes du serveur (STATE_FILE redirigé AVANT l'import, cf. server.test.js).
 process.env.STATE_FILE = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'compteur-stats-')), 'state.json');
@@ -587,6 +587,33 @@ describe('Stats — tableaux par groupe et par opérateur, en direct', () => {
     assert.equal(operateurs(page.el('op-list').innerHTML)[0][2], '+209');
   });
 
+  // Même trou que dans la file de l'écran opérateur (2026-10-13) : le corps de la réponse
+  // était attendu sans limite, et `liveStatsBusy` restait pris pour toujours — tableaux
+  // figés jusqu'au rechargement, pendant que les tuiles, elles, suivaient le WebSocket.
+  for (const [nom, panne, sourd] of [
+    ['corps qui n\'arrive jamais', () => corpsQuiCale(), false],
+    ['requête qui ne revient jamais, navigateur sourd à abort()', PEND, true],
+  ]) {
+    test(`relecture en direct — ${nom} : abandonnée au bout de 6 s, puis les tableaux se remettent à jour`, T, async () => {
+      const { page, srv } = await ouvrir();
+      page.reseau.sourd = sourd;
+      srv.forcer = panne;
+      page.socket.recevoir(srv.clic(1)); // relecture n°1 : ne reviendra pas
+      await page.avancer(100);
+      assert.equal(srv.histo.length, 1);
+
+      srv.forcer = null;
+      page.socket.recevoir(srv.clic(1)); // un autre clic pendant qu'elle est attendue
+      await page.avancer(5800);
+      assert.equal(srv.histo.length, 1, 'jamais deux relectures à la fois');
+      assert.equal(operateurs(page.el('op-list').innerHTML)[0][2], '+205', 'tableau encore figé');
+
+      await page.avancer(1200); // 6 s : abandonnée — et la relecture de rattrapage part
+      assert.equal(srv.histo.length, 2);
+      assert.equal(operateurs(page.el('op-list').innerHTML)[0][2], '+207');
+    });
+  }
+
   test('groupe créé, renommé ou supprimé par l\'admin : le tableau suit sans recharger', T, async () => {
     const { page, srv } = await ouvrir();
     const d = srv.evt();
@@ -789,5 +816,69 @@ describe('Stats — rafraîchissement et connexion', () => {
     assert.equal(page.el('s-in').textContent, 4, 'entrées de A affichées sous B');
     assert.equal(page.lire('fullHistory.length'), 0, 'courbe de A affichée sous B');
     assert.deepEqual(operateurs(page.el('op-list').innerHTML).map((o) => o[0]), ['Zoé']);
+  });
+});
+
+// ── fetchT : le corps est lu sous délai, morceau par morceau ─────────────────
+// (le même code est recopié dans admin.html — tests/static-contracts.test.js le vérifie)
+
+describe('Stats — requêtes bornées de bout en bout', () => {
+  // Réponse dont le corps arrive par morceaux, chacun libéré par le test.
+  function enMorceaux(texte, coupes) {
+    const octets = new TextEncoder().encode(texte);
+    const parts = [];
+    let debut = 0;
+    for (const c of [...coupes, octets.length]) { parts.push(octets.slice(debut, c)); debut = c; }
+    const lectures = [];
+    const flux = {
+      ok: true, status: 200, headers: { get: () => null },
+      body: { getReader: () => ({ read: () => { const d = differe(); lectures.push(d); return d.promise; } }) },
+    };
+    return {
+      flux, parts,
+      morceau: (i) => lectures[i].resolve({ done: false, value: parts[i] }),
+      fin: () => lectures.at(-1).resolve({ done: true, value: undefined }),
+    };
+  }
+  const ouvrirNu = (repondre) => charger('stats.html', 'function loadStats', { globaux: { TextDecoder }, repondre, depart: T0 });
+
+  test('gros corps sur réseau lent : le délai repart à chaque morceau, la réponse arrive entière', T, async () => {
+    const texte = JSON.stringify({ nom: 'Chloé — soirée d\'été', history: [1, 2, 3] });
+    const iAccent = new TextEncoder().encode(texte.slice(0, texte.indexOf('é'))).length;
+    const m = enMorceaux(texte, [5, iAccent + 1, 30]); // la 2e coupe tombe AU MILIEU du « é » (2 octets)
+    const enTetes = differe();
+    const page = ouvrirNu(() => enTetes.promise);
+    const recu = page.appeler("fetchT('/api/history?x=1').then((r) => r.json())");
+    await page.avancer(5000);
+    enTetes.resolve(m.flux); // les en-têtes ont déjà mis 5 s : le corps repart d'un délai entier
+    await stabiliser();
+    for (let i = 0; i < m.parts.length; i++) { await page.avancer(5000); m.morceau(i); await stabiliser(); }
+    await page.avancer(5000);
+    m.fin();
+    assert.deepEqual(net(await recu), JSON.parse(texte), '30 s au total, jamais 6 s sans rien recevoir');
+  });
+
+  test('corps qui s\'arrête en route : abandonné 6 s après le dernier morceau, même si le navigateur est sourd à abort()', T, async () => {
+    const m = enMorceaux('{"history":[1,2,3]}', [8]);
+    const page = ouvrirNu(() => m.flux);
+    page.reseau.sourd = true;
+    let issue = null;
+    page.appeler("fetchT('/api/history?x=1').then((r) => r.json())").then(() => { issue = 'reçu'; }, (e) => { issue = `abandonné : ${e.message}`; });
+    await stabiliser();
+    await page.avancer(3000);
+    m.morceau(0);
+    await stabiliser();
+    await page.avancer(5999);
+    assert.equal(issue, null, 'encore dans le délai (compté depuis le dernier morceau)');
+    await page.avancer(1);
+    assert.equal(issue, 'abandonné : délai dépassé');
+  });
+
+  test('réponse ordinaire : ok, status et json() comme avant ; un corps qui n\'est pas du JSON fait échouer json()', T, async () => {
+    const page = ouvrirNu((req) => (req.params.x === '1' ? reponse(404, { error: 'event not found' }) : reponse(200, null, { brut: '<html>portail</html>' })));
+    const r = await page.appeler("fetchT('/api/history?x=1').then(async (r) => [r.ok, r.status, await r.json()])");
+    assert.deepEqual(net(r), [false, 404, { error: 'event not found' }]);
+    const html = await page.appeler("fetchT('/api/history?x=2').then((r) => r.json()).then(() => 'lu', (e) => e.name)");
+    assert.equal(html, 'SyntaxError');
   });
 });

@@ -11,7 +11,7 @@
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
-const { charger, reponse, differe, stabiliser, HORS_LIGNE, PEND } = require('./shared/browser-harness');
+const { charger, reponse, corpsQuiCale, differe, stabiliser, HORS_LIGNE, PEND } = require('./shared/browser-harness');
 
 const E = 'abc123', G = 'def456';
 const T = { timeout: 10_000 };
@@ -26,13 +26,17 @@ function serveur({ total = 10, capacity = 100, groupCount = 4 } = {}) {
     }
     if (req.chemin === '/api/count') {
       if (s.forcer) { const r = s.forcer(req); if (r) return r; }
-      if (s.vus.has(req.corps.uuid)) return reponse(200, { total: s.total, dup: true });
-      s.vus.add(req.corps.uuid);
-      s.total = Math.max(0, s.total + req.corps.delta);
-      s.comptes.push(req.corps);
-      return reponse(200, { total: s.total, alert: s.total >= s.capacity });
+      return s.compter(req);
     }
     return reponse(404, { error: 'not found' });
+  };
+  // Le comptage seul : pour simuler « le serveur a compté, mais sa réponse se perd en route ».
+  s.compter = (req) => {
+    if (s.vus.has(req.corps.uuid)) return reponse(200, { total: s.total, dup: true });
+    s.vus.add(req.corps.uuid);
+    s.total = Math.max(0, s.total + req.corps.delta);
+    s.comptes.push(req.corps);
+    return reponse(200, { total: s.total, alert: s.total >= s.capacity });
   };
   return s;
 }
@@ -125,15 +129,23 @@ describe('Opérateur — file d\'attente', () => {
     });
   }
 
-  test('minuterie de 2 s : rien ne part si le navigateur se dit hors ligne', T, async () => {
+  // navigator.onLine n'est que l'avis du navigateur. S'il reste à « hors ligne » après le
+  // retour du réseau (et que l'événement `online` ne vient pas), la minuterie ne doit pas
+  // s'y fier : avant, plus rien ne relançait la file sans un appui ou la réouverture du
+  // WebSocket (jusqu'à 30 s plus tard).
+  test('minuterie de 2 s : elle réessaie même si le navigateur se dit (encore) hors ligne', T, async () => {
     const { page, srv } = await ouvrir();
     srv.enLigne = false;
-    taper(page);
-    await stabiliser();
-    page.reseau.oublier();
     page.navigator.onLine = false;
-    await page.avancer(10_000);
-    assert.equal(envois(page).length, 0);
+    taper(page); taper(page);
+    await stabiliser();
+    assert.equal(page.lire('queue.length'), 2);
+
+    srv.enLigne = true; // le réseau est revenu ; le navigateur, lui, n'a rien signalé
+    await page.avancer(2000);
+    assert.deepEqual(srv.comptes.map((c) => c.uuid), ['uuid-1', 'uuid-2']);
+    assert.equal(page.lire('queue.length'), 0);
+    assert.equal(badge(page), null);
   });
 
   // La tête de file bloque les suivantes : jamais de réordonnancement, jamais d'op qui
@@ -164,6 +176,25 @@ describe('Opérateur — file d\'attente', () => {
     await stabiliser();
     assert.deepEqual(envois(page).map((a) => a.corps.uuid), ['uuid-1', 'uuid-2']);
     assert.equal(page.lire('queue.length'), 0);
+  });
+
+  // Le bail se renouvelle à chaque op : une passe lente mais VIVANTE (réseau saturé, 4 s par
+  // réponse) ne doit jamais être prise pour une passe bloquée, même au-delà de 15 s.
+  test('verrou : une passe longue mais vivante garde la main — chaque op part une seule fois', T, async () => {
+    const { page, srv } = await ouvrir();
+    const enVol = [];
+    srv.forcer = (req) => { const d = differe(); enVol.push(d); return d.promise.then(() => srv.compter(req)); };
+    for (let i = 0; i < 5; i++) taper(page);
+    await stabiliser();
+    for (let i = 0; i < 5; i++) {
+      await page.avancer(4000); // deux minuteries de 2 s relancent flush() pendant chaque attente
+      assert.equal(enVol.length, i + 1, `${(i + 1) * 4} s : une seule requête en vol`);
+      enVol[i].resolve();
+      await stabiliser();
+    }
+    assert.deepEqual(envois(page).map((a) => a.corps.uuid), ['uuid-1', 'uuid-2', 'uuid-3', 'uuid-4', 'uuid-5']);
+    assert.equal(page.lire('queue.length'), 0);
+    assert.equal(srv.total, 15);
   });
 
   test('verrou : dix déclenchements simultanés → une seule requête en vol', T, async () => {
@@ -215,14 +246,145 @@ describe('Opérateur — file d\'attente', () => {
     srv.forcer = PEND;
     taper(page);
     await page.avancer(4999);
-    assert.equal(page.lire('flushing'), true, 'la requête est encore attendue');
+    assert.equal(page.lire('flushBusy()'), true, 'la requête est encore attendue');
     await page.avancer(1);
-    assert.equal(page.lire('flushing'), false, 'abandonnée à 5 s : la file est de nouveau libre');
+    assert.equal(page.lire('flushBusy()'), false, 'abandonnée à 5 s : la file est de nouveau libre');
     assert.equal(page.lire('queue.length'), 1);
 
     srv.forcer = null;
     await page.avancer(2000);
     assert.deepEqual(srv.comptes.map((c) => c.uuid), ['uuid-1'], 'renvoyée avec le même uuid');
+  });
+
+  // ── Le blocage du 2026-10-13 ───────────────────────────────────────────────
+  // Constaté par Elie (DuckDuckGo, production) : après une coupure, les appuis restaient
+  // « en attente » pour de bon, les nouveaux s'y ajoutaient, alors que les comptages des
+  // autres continuaient d'arriver — il fallait recharger la page. Reproduit dans WebKit :
+  // UNE réponse de /api/count dont les en-têtes arrivent mais pas le corps, et l'attente
+  // de ce corps, sans limite, gardait le verrou de flush() pour toujours.
+  test('réponse dont le corps n\'arrive jamais : la passe est abandonnée, l\'op gardée, et tout repart sans recharger', T, async () => {
+    const { page, srv } = await ouvrir();
+    // Le serveur a compté l'op ; sa réponse se perd après les en-têtes.
+    srv.forcer = (req) => { srv.compter(req); return corpsQuiCale(); };
+    taper(page);
+    await stabiliser();
+    assert.equal(srv.total, 11, 'le serveur, lui, a compté');
+    assert.equal(page.lire('flushBusy()'), true);
+
+    srv.forcer = null; // le réseau refonctionne dès maintenant
+    taper(page); taper(page); // …mais les appuis suivants butent sur la passe en cours
+    await page.avancer(4999);
+    assert.equal(envois(page).length, 1, 'rien ne part tant que le corps est attendu');
+    assert.equal(badge(page), '3 en attente');
+
+    // Pendant ce temps le WebSocket vit sa vie : c'est ce qui rendait la panne si déroutante.
+    page.socket.recevoir({ type: 'update', total: 40, capacity: 100, groups: [{ id: G, name: 'Principal', count: 9 }] });
+    assert.equal(page.el('count').textContent, 40);
+
+    await page.avancer(1); // 5 s après les en-têtes : le corps n'est plus attendu
+    assert.equal(page.lire('flushBusy()'), false, 'le verrou est rendu');
+    assert.equal(page.lire('queue.length'), 3, 'l\'op sans accusé de réception est gardée');
+
+    await page.avancer(2000);
+    assert.equal(page.lire('queue.length'), 0, 'la file se vide toute seule');
+    assert.equal(badge(page), null);
+    assert.deepEqual(srv.comptes.map((c) => c.uuid), ['uuid-1', 'uuid-2', 'uuid-3'], 'chaque appui compté UNE fois');
+    assert.equal(srv.total, 13);
+    assert.equal(envois(page).filter((a) => a.corps.uuid === 'uuid-1').length, 2, 'renvoyée avec le même uuid → doublon reconnu');
+  });
+
+  test('en-têtes à la dernière seconde : le corps a droit à son propre délai', T, async () => {
+    const { page, srv } = await ouvrir();
+    const enTetes = differe();
+    srv.forcer = () => enTetes.promise;
+    taper(page);
+    await page.avancer(4900);
+    enTetes.resolve(corpsQuiCale());
+    await stabiliser();
+    await page.avancer(4900); // 9,8 s après l'envoi, 4,9 s après les en-têtes
+    assert.equal(page.lire('flushBusy()'), true);
+    await page.avancer(100);
+    assert.equal(page.lire('flushBusy()'), false);
+    assert.equal(page.lire('queue.length'), 1);
+  });
+
+  // Certains navigateurs n'interrompent pas vraiment une requête sur abort() : le délai doit
+  // tenir à une minuterie de la page, pas à la bonne volonté du moteur.
+  for (const [nom, cale] of [['requête qui ne revient jamais', PEND], ['corps qui n\'arrive jamais', () => corpsQuiCale()]]) {
+    test(`navigateur sourd à abort() — ${nom} : abandonnée quand même, puis comptée une fois`, T, async () => {
+      const { page, srv } = await ouvrir();
+      page.reseau.sourd = true;
+      srv.forcer = cale;
+      taper(page);
+      await stabiliser(); // les en-têtes (s'il y en a) arrivent tout de suite
+      await page.avancer(5000);
+      assert.equal(page.lire('flushBusy()'), false);
+      assert.equal(page.lire('queue.length'), 1);
+
+      srv.forcer = null;
+      await page.avancer(2000);
+      assert.deepEqual(srv.comptes.map((c) => c.uuid), ['uuid-1']);
+      assert.equal(page.lire('queue.length'), 0);
+    });
+  }
+
+  // Seconde ceinture : le verrou est un bail. Page figée par le téléphone (arrière-plan)
+  // avec une requête en vol → au réveil, ses minuteries n'ont pas tourné, mais l'heure a
+  // passé : une nouvelle passe part sans attendre. L'ancienne peut encore recevoir sa
+  // réponse — elle ne doit ni retirer une AUTRE op, ni réécrire l'affichage.
+  test('page figée avec une requête en vol : nouvelle passe au réveil, et l\'accusé tardif de l\'ancienne ne jette pas l\'op suivante', T, async () => {
+    const { page, srv } = await ouvrir();
+    const ancienne = differe(), suivante = differe();
+    let n = 0;
+    srv.forcer = (req) => {
+      n += 1;
+      if (n === 1) return ancienne.promise;                       // uuid-1, passe d'avant le gel
+      if (n === 3 && req.corps.uuid === 'uuid-2') return suivante.promise; // uuid-2, en vol
+      return null;
+    };
+    taper(page); taper(page);
+    await stabiliser();
+    assert.equal(envois(page).length, 1);
+
+    page.horloge.maintenant += 60_000; // une minute passe SANS qu'aucune minuterie ne tourne
+    assert.equal(page.lire('flushBusy()'), false, 'le bail a expiré');
+    page.fenetre('online');
+    await stabiliser();
+    assert.deepEqual(envois(page).map((a) => a.corps.uuid), ['uuid-1', 'uuid-1', 'uuid-2']);
+    assert.equal(page.lire('queue.length'), 1, 'uuid-1 acquittée par la nouvelle passe');
+    assert.equal(page.el('count').textContent, 11);
+
+    ancienne.resolve(reponse(200, { total: 999 })); // la vieille réponse finit par arriver
+    await stabiliser();
+    assert.deepEqual(page.valeur('queue.map((o) => o.uuid)'), ['uuid-2'], 'uuid-2, encore en vol, reste en file');
+    assert.equal(page.el('count').textContent, 11, 'un total périmé ne réécrit pas l\'affichage');
+    page.fenetre('online');
+    await stabiliser();
+    assert.equal(envois(page).length, 3, 'l\'ancienne passe, en s\'arrêtant, ne libère pas le bail de la nouvelle');
+
+    suivante.reject(new TypeError('Failed to fetch')); // …et sa requête échoue
+    await stabiliser();
+    assert.equal(page.lire('queue.length'), 1, 'toujours là : elle n\'a jamais été acquittée');
+
+    await page.avancer(2000);
+    assert.deepEqual(srv.comptes.map((c) => c.uuid), ['uuid-1', 'uuid-2']);
+    assert.equal(page.lire('queue.length'), 0);
+    assert.equal(srv.total, 12);
+  });
+
+  // Le bail se mesure à l'heure du téléphone, qui peut reculer (remise à l'heure automatique,
+  // changement de fuseau) : un âge négatif ne doit pas le faire durer une heure de plus.
+  test('horloge du téléphone reculée pendant une requête en vol : le bail est caduc, la file repart', T, async () => {
+    const { page, srv } = await ouvrir();
+    let n = 0;
+    srv.forcer = () => { n += 1; return n === 1 ? PEND() : null; };
+    taper(page);
+    await stabiliser();
+    page.horloge.maintenant -= 3_600_000;
+    page.fenetre('online');
+    await stabiliser();
+    assert.deepEqual(srv.comptes.map((c) => c.uuid), ['uuid-1']);
+    assert.equal(page.lire('queue.length'), 0);
   });
 
   // Portail captif d'un Wi-Fi public : la requête est redirigée vers une page de connexion
@@ -433,6 +595,24 @@ describe('Opérateur — affichage', () => {
         assert.equal(page.sockets.length, 1, 'le WebSocket est tenté dans tous les cas');
       }
     });
+
+    // Même trou que dans la file : le corps de /api/state attendu sans limite, et connect()
+    // — donc le WebSocket, le point vert, le direct — n'était jamais appelé.
+    for (const [nom, repondre, sourd] of [
+      ['corps qui n\'arrive jamais', () => corpsQuiCale(), false],
+      ['requête qui ne revient jamais, navigateur sourd à abort()', PEND, true],
+    ]) {
+      test(`/api/state — ${nom} : l'état restauré reste affiché, et le WebSocket s'ouvre quand même`, T, async () => {
+        const page = charger('index.html', 'function flush', { url: `/?e=${E}&g=${G}`, stockage: { op_name: 'Alice', op_last_state: MEMO }, repondre });
+        page.reseau.sourd = sourd;
+        await stabiliser(); // les en-têtes (s'il y en a) arrivent tout de suite
+        await page.avancer(4999);
+        assert.equal(page.sockets.length, 0, 'encore dans le délai');
+        await page.avancer(1);
+        assert.equal(page.sockets.length, 1);
+        assert.equal(page.el('count').textContent, 42);
+      });
+    }
 
     test('remplacé par la réponse de /api/state quand elle arrive', T, async () => {
       const { page } = await ouvrir({ stockage: { op_name: 'Alice', op_last_state: MEMO } });

@@ -239,10 +239,44 @@ function applyHistory(d) {
   capacity = d.capacity ?? capacity;
 }
 
+// Requête bornée DE BOUT EN BOUT. Rend { ok, status, json() } — le corps est déjà lu.
+// Avant, la minuterie s'arrêtait à l'arrivée des en-têtes et `r.json()` attendait le corps
+// sans limite : une réponse qui cale en route (réseau qui tombe ou sature) ne se terminait
+// jamais — et la relecture « en direct », qui s'interdit deux requêtes à la fois,
+// restait verrouillée : tableaux par groupe / par opérateur figés jusqu'au rechargement.
+// Le corps est lu ici, morceau par morceau, et le délai REPART à chaque morceau : un gros
+// historique sur réseau lent a le droit de durer, pas de rester `ms` sans avancer. Le délai
+// tient à une minuterie de la page (Promise.race), pas à la seule bonne volonté d'abort().
 function fetchT(url, opts, ms = 6000) {
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), ms);
-  return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(t));
+  let timer = null, expire, settled = false;
+  const deadline = new Promise((_, reject) => { expire = reject; });
+  const arm = () => {
+    clearTimeout(timer);
+    if (settled) return;
+    timer = setTimeout(() => { ctrl.abort(); expire(new Error('délai dépassé')); }, ms);
+  };
+  arm();
+  const exchange = (async () => {
+    const res = await fetch(url, { ...opts, signal: ctrl.signal });
+    arm();
+    let text = '';
+    if (res.body && res.body.getReader && typeof TextDecoder === 'function') {
+      const reader = res.body.getReader(), dec = new TextDecoder();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        text += dec.decode(value, { stream: true });
+        arm();
+      }
+      text += dec.decode();
+    } else {
+      text = await res.text();
+    }
+    return { ok: res.ok, status: res.status, json: async () => JSON.parse(text) };
+  })();
+  exchange.catch(() => {}); // délai dépassé d'abord : l'échec tardif n'intéresse plus personne
+  return Promise.race([exchange, deadline]).finally(() => { settled = true; clearTimeout(timer); });
 }
 
 // Repli du champ « code » (`input.secret`, cf. CSS) : si le navigateur ne sait pas masquer

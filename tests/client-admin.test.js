@@ -11,7 +11,7 @@
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
-const { charger, reponse, stabiliser, HORS_LIGNE } = require('./shared/browser-harness');
+const { charger, reponse, corpsQuiCale, stabiliser, HORS_LIGNE, PEND } = require('./shared/browser-harness');
 
 const T  = { timeout: 10_000 };
 const E  = 'abc123', E2 = 'bbb222';
@@ -638,6 +638,26 @@ describe('Admin — export XLSX', () => {
       assert.equal(fichiers.length, 0);
     }
   });
+
+  // Le corps de la réponse était attendu sans limite : un historique qui cale en route
+  // (réseau qui tombe ou sature) laissait le bouton « Exporter » sans effet, sans un mot.
+  for (const [nom, panne, sourd] of [
+    ['corps qui n\'arrive jamais', () => corpsQuiCale(), false],
+    ['requête qui ne revient jamais, navigateur sourd à abort()', PEND, true],
+  ]) {
+    test(`export — ${nom} : alerte au bout de 6 s, aucun fichier`, T, async () => {
+      const { page, srv, fichiers } = await ouvrir();
+      page.reseau.sourd = sourd;
+      srv.forcer = (req) => (req.chemin === '/api/history' ? panne() : null);
+      page.appeler('exportXLSX()'); // pas de `await` : sans le correctif il ne finirait jamais
+      await stabiliser();
+      await page.avancer(5999);
+      assert.deepEqual(page.journal.alertes, [], 'encore dans le délai');
+      await page.avancer(1);
+      assert.deepEqual(page.journal.alertes, ['Erreur lors de l\'export']);
+      assert.equal(fichiers.length, 0);
+    });
+  }
 
   // SheetJS vient d'un CDN. En LAN sans internet, ou si le CDN est bloqué, `XLSX` n'existe
   // pas : le bouton « Exporter » ne faisait alors RIEN, sans un mot.

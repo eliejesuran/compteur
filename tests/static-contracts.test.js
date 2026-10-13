@@ -192,6 +192,29 @@ describe('Requêtes des pages', () => {
     }
   });
 
+  // 2026-10-13 : une réponse dont le corps n'arrivait jamais bloquait la file de l'écran
+  // opérateur pour de bon (verrou tenu par un `await res.json()` sans limite). Chaque page
+  // a UN utilitaire qui borne la requête entière, corps compris ; un fetch() nu ailleurs
+  // rouvrirait le trou.
+  for (const [page, utilitaire] of [['index.html', 'requestJSON'], ['admin.html', 'fetchT'], ['stats.html', 'fetchT']]) {
+    test(`${page} : un seul appel à fetch(), dans ${utilitaire}()`, () => {
+      const js = script(page).replace(/\/\/[^\n]*/g, '');
+      const appels = [...js.matchAll(/(?<![\w.])fetch\(/g)].map((m) => m.index);
+      assert.equal(appels.length, 1);
+      const debut = js.indexOf(`function ${utilitaire}(`);
+      assert.ok(debut >= 0 && appels[0] > debut && appels[0] < js.indexOf('\n}\n', debut), `fetch() hors de ${utilitaire}()`);
+    });
+  }
+
+  test('fetchT : le même code dans admin.html et stats.html', () => {
+    const corps = (page) => {
+      const js = script(page), debut = js.indexOf('function fetchT(');
+      return js.slice(debut, js.indexOf('\n}\n', debut) + 2);
+    };
+    assert.ok(corps('admin.html').includes('getReader'));
+    assert.equal(corps('admin.html'), corps('stats.html'));
+  });
+
   test('admin.html : /api/history n\'apparaît que dans exportXLSX()', () => {
     const js = script('admin.html');
     const avant = js.slice(0, js.indexOf('async function exportXLSX'));

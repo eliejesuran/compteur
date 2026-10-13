@@ -851,60 +851,108 @@ function tap(delta) {
   flush();
 }
 
-function fetchWithTimeout(url, opts, ms = 5000) {
+// Une requête bornée DE BOUT EN BOUT : les en-têtes, PUIS le corps. Rend { ok, status, data }
+// — `data` vaut null si le corps n'est pas du JSON — ou rejette (coupure, délai dépassé).
+// L'ancien fetchWithTimeout() arrêtait sa minuterie à l'arrivée des en-têtes et laissait
+// `await res.json()` sans aucune limite : une réponse dont le corps ne finit jamais d'arriver
+// (réseau qui tombe ou sature en cours de réponse) ne se terminait JAMAIS. Dans flush(), le
+// verrou restait pris pour toujours : plus rien ne partait — ni les appuis en attente, ni
+// les suivants — jusqu'au rechargement de la page, alors que le WebSocket, lui, continuait
+// d'afficher les comptages des autres. Mesuré dans WebKit (le moteur de Safari et de
+// DuckDuckGo) : bloqué plus de 110 s, et pas davantage débloqué par le retour du réseau.
+// Le délai est porté par une minuterie de LA PAGE (Promise.race), pas seulement par
+// l'abandon de la requête : la promesse se termine même si le navigateur n'honore pas abort().
+const REQ_SILENCE_MS = 5000; // délai accordé aux en-têtes, puis de nouveau au corps
+
+function requestJSON(url, opts, ms = REQ_SILENCE_MS) {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), ms);
-  return fetch(url, { ...opts, signal: ctrl.signal })
-    .finally(() => clearTimeout(timer));
+  let timer = null, expire, settled = false;
+  const deadline = new Promise((_, reject) => { expire = reject; });
+  const arm = () => {
+    clearTimeout(timer);
+    if (settled) return;
+    timer = setTimeout(() => { ctrl.abort(); expire(new Error('délai dépassé')); }, ms);
+  };
+  arm();
+  const exchange = (async () => {
+    const res = await fetch(url, { ...opts, signal: ctrl.signal });
+    arm(); // les en-têtes sont arrivés : le corps a droit au même délai
+    let data = null;
+    try { data = await res.json(); } catch {} // pas du JSON (page d'un portail, d'un proxy…)
+    return { ok: res.ok, status: res.status, data };
+  })();
+  exchange.catch(() => {}); // délai dépassé d'abord : l'échec tardif de l'échange n'intéresse plus personne
+  return Promise.race([exchange, deadline]).finally(() => { settled = true; clearTimeout(timer); });
 }
 
-// Verrou : une seule instance de flush peut tourner à la fois.
-let flushing = false;
+// Une seule passe de flush() à la fois. Le verrou est un BAIL, pas un booléen : il porte
+// l'heure de la dernière avancée de la passe et expire tout seul si elle n'avance plus.
+// Avec requestJSON(), aucune attente n'est illimitée ; le bail est la seconde ceinture, pour ce
+// qu'on n'a pas prévu (page figée en arrière-plan puis réveillée, attente ajoutée un jour
+// dans la boucle) : la file ne peut plus rester bloquée jusqu'au rechargement.
+const FLUSH_STALL_MS = 15000; // > 2 × REQ_SILENCE_MS : une passe vivante ne l'atteint jamais
+let flushPass = 0;            // numéro de la passe en cours
+let flushAlive = 0;           // 0 = aucune passe ; sinon l'heure de sa dernière avancée
+
+function flushBusy() {
+  if (flushAlive === 0) return false;
+  const age = Date.now() - flushAlive; // négatif = horloge du téléphone reculée : bail caduc
+  return age >= 0 && age < FLUSH_STALL_MS;
+}
+
+// Retire CETTE op, où qu'elle soit — jamais « la première de la file » : si une passe
+// abandonnée finit par recevoir son accusé de réception, un shift() jetterait l'op suivante,
+// qui n'est pas encore partie.
+function dequeue(op) {
+  const i = queue.indexOf(op);
+  if (i < 0) return;
+  queue.splice(i, 1);
+  saveQueue();
+  renderQueueBadge();
+}
 
 async function flush() {
-  if (flushing) return;
-  flushing = true;
+  if (flushBusy()) return;
+  const pass = ++flushPass; // une passe remplacée (bail expiré) s'arrête à sa prochaine reprise
+  flushAlive = Date.now();
   try {
-    while (queue.length > 0) {
+    while (queue.length > 0 && pass === flushPass) {
       const op = queue[0];
+      flushAlive = Date.now();
       try {
-        const res = await fetchWithTimeout('/api/count', {
+        const { ok, status, data } = await requestJSON('/api/count', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(op),
         });
-        if (!res.ok) {
+        if (!ok) {
           // Une op n'est JETÉE que sur un refus définitif de NOTRE API : 400 ou 404 répondu
           // en JSON avec un champ `error` (événement archivé, groupe supprimé) — elle ne
           // passera jamais, et la garder bloquerait toutes les suivantes.
-          // Tout le reste se GARDE et se réessaie (setInterval 2s / online / visibilitychange
+          // Tout le reste se GARDE et se réessaie (minuterie de 2 s / online / visibilitychange
           // relancent flush) : 429 et 5xx, mais aussi 401 / 403 / 407 / 408… Ceux-là ne
           // viennent jamais de notre API sur /api/count : ils viennent de ce qu'il y a
           // devant (pare-feu ou défi anti-bot, proxy, portail captif d'un Wi-Fi public).
           // Les jeter perdait des comptages en silence.
-          const refus = (res.status === 400 || res.status === 404) ? await res.json().catch(() => null) : null;
-          if (!refus || typeof refus.error !== 'string') break;
-          queue.shift();
-          saveQueue();
-          renderQueueBadge();
+          const refus = (status === 400 || status === 404) && data && typeof data.error === 'string';
+          if (!refus) break;
+          dequeue(op);
           continue;
         }
-        const data = await res.json();
         // Un 200 sans `total` ne vient pas de notre API (page de portail servie en JSON…) :
         // l'op n'est PAS acquittée.
         if (!data || typeof data.total !== 'number') break;
-        queue.shift();
-        saveQueue();
-        renderQueueBadge();
+        dequeue(op);
         // setCount déclenche déjà triggerAlert. Le total d'un AUTRE événement (op restée en
-        // file avant un changement de lien) n'a rien à faire à l'écran de celui-ci.
-        if (!data.dup && op.e === EVENT_ID) setCount(data.total);
+        // file avant un changement de lien) n'a rien à faire à l'écran de celui-ci — pas plus
+        // que celui d'une passe remplacée, qui date.
+        if (!data.dup && op.e === EVENT_ID && pass === flushPass) setCount(data.total);
       } catch {
-        break; // réseau indisponible — réessayer plus tard
+        break; // réseau indisponible ou délai dépassé — réessayer plus tard
       }
     }
   } finally {
-    flushing = false;
+    if (pass === flushPass) flushAlive = 0;
   }
 }
 
@@ -927,7 +975,12 @@ document.addEventListener('visibilitychange', () => {
     wsReconnectNow();
   }
 });
-setInterval(() => { if (navigator.onLine && queue.length > 0) flush(); }, 2000);
+// Tant que la file n'est pas vide, on réessaie toutes les 2 s — SANS consulter
+// navigator.onLine. Ce n'est que l'avis du navigateur : s'il reste à « hors ligne » après
+// le retour du réseau (ou si l'événement `online` ne vient pas), plus rien ne relançait la
+// file avant la réouverture du WebSocket (jusqu'à 30 s) ou un nouvel appui. Une tentative
+// sans réseau échoue aussitôt et ne coûte rien.
+setInterval(() => { if (queue.length > 0) flush(); }, 2000);
 
 // ── WebSocket — real-time sync ──────────────────────────────────────
 
@@ -1227,11 +1280,12 @@ if (EVENT_ID && GROUP_ID) {
       setCount(s.count ?? 0, capacity);
     }
   } catch {}
-  fetchWithTimeout(`/api/state?e=${encodeURIComponent(EVENT_ID)}&g=${encodeURIComponent(GROUP_ID)}`)
-    .then(r => r.ok ? r.json() : null)
-    .then(d => {
+  // requestJSON() borne aussi le corps : sinon une réponse qui cale après ses en-têtes laissait
+  // cette chaîne en suspens, et connect() — donc le WebSocket — n'était jamais appelé.
+  requestJSON(`/api/state?e=${encodeURIComponent(EVENT_ID)}&g=${encodeURIComponent(GROUP_ID)}`)
+    .then(({ ok, data: d }) => {
       // 404 / hors ligne → on garde l'état restauré (B7) au lieu d'écraser avec undefined→NaN.
-      if (d && typeof d.total === 'number') {
+      if (ok && d && typeof d.total === 'number') {
         setCount(d.total, d.capacity);
         setGroupCount(d.groupCount, d.groupName);
       }

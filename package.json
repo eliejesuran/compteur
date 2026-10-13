@@ -9,6 +9,7 @@
     "test": "npm run test:local && npm run test:worker",
     "test:local": "node --test tests/*.test.js",
     "test:worker": "vitest run",
+    "test:webkit": "node tests/webkit/run.js",
     "cf:dev": "wrangler dev",
     "deploy": "wrangler deploy"
   },
